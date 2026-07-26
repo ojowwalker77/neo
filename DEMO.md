@@ -135,10 +135,54 @@ numbers, and anyone with the file can recompute it.
 
 ---
 
-## Next
+## 5 · A photograph, written down as math
 
-The decoder is done. The fitter — a real photograph in, a `.mathset` out — is
-what section 5 will be.
+**2026-07-26**
+
+The first four sections used sets written by hand. This one is read off a real
+photograph.
+
+```bash
+cd mathset && cargo run --release -- fit ../assets/whiterabbit.jpg out.mathset --preview out.png
+```
+
+3.4 seconds. **24,886 primitives, 30.86 dB.**
+
+That number is measured the hard way: the emitted file is reloaded from disk
+and decoded by the ordinary decoder — the one that has never seen the
+photograph — and *that* is compared against the source. Nothing the fitter
+believes about its own canvas is taken on trust.
+
+Open the output. It is the same format as the five-line file in section 1,
+just longer. Every row is still nine or ten numbers describing one ellipse,
+still in normalized coordinates, still with no pixel anywhere in it. Which
+means:
+
+```bash
+cd mathset && cargo run --release -- render out.mathset big.png --scale 4
+```
+
+The photograph now renders at 1804×2044 — four times the resolution it was
+fitted at. Not upscaled. The primitives were re-evaluated at the finer
+sampling, and edges that were two pixels wide in the source are now smooth
+curves, because in the description they were never pixels at all.
+
+The kept fits and their numbers live in [fits/](fits/).
+
+**What is honestly wrong with this result:** 24,886 primitives for 230,461
+pixels is one primitive per nine pixels. That is too dense to call a
+description of the image. The cause is structural — greedy placement can never
+adjust a primitive after placing it, so the only way to fix an error is to
+stack another primitive over it, and the count inflates without the
+description improving. See
+[docs/fitting.md](docs/fitting.md#the-honest-limitation).
+
+Section 6 will be gradient refinement, and the number to watch is not the dB —
+it is the dB *per primitive*.
+
+---
+
+## Next
 
 See [docs/roadmap.md](docs/roadmap.md) for what comes after, and why the
 two-frame test is the one that decides whether any of this extends to video.

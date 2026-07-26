@@ -22,7 +22,7 @@ first.
 Verified by two independent implementations agreeing at 56–62 dB, and by the
 1× / 8× check. See [verification.md](verification.md).
 
-## 2 · Fitter — **next**
+## 2 · Fitter — **done**
 
 Image in, `.mathset` out.
 
@@ -38,7 +38,7 @@ Watch: reconstruction fidelity, primitive count, and where the primitives
 cluster. If they pile up along edges, `β` is not doing its job and the
 primitive needs another look before stage 5.
 
-## 3 · Gradient refinement
+## 3 · Gradient refinement — **next**
 
 Greedy placement cannot refine. Once a primitive is down, its parameters are
 fixed for good, and improving the image means adding more primitives on top —

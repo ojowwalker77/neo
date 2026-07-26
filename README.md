@@ -33,7 +33,7 @@ That is the direction. It is being built one verified step at a time.
 |---|---|
 | `.mathset` format | defined |
 | decoder — math in, image out | working, cross-verified |
-| fitter — image in, math out | not started |
+| fitter — image in, math out | working, 30.9 dB on the test image |
 | gradient refinement | not started |
 | two-frame persistence | not started |
 | temporal curves | not started |
@@ -67,6 +67,7 @@ See [DEMO.md](DEMO.md) for what is worth looking at, and
 
 - [docs/format.md](docs/format.md) — the `.mathset` file, normatively
 - [docs/math.md](docs/math.md) — the primitive, compositing, colour, and the derivations
+- [docs/fitting.md](docs/fitting.md) — how an image becomes a set, and what was measured
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 

@@ -103,12 +103,6 @@ impl MathSet {
         Ok(())
     }
 
-    /// Long edge of the reference canvas. The unit that normalized coords
-    /// are measured in.
-    pub fn unit(&self) -> f32 {
-        self.canvas[0].max(self.canvas[1]) as f32
-    }
-
     pub fn splat(&self, i: usize) -> Splat {
         let s = &self.splats[i];
         Splat {
@@ -132,4 +126,71 @@ impl MathSet {
 /// the file stores sRGB because that is what a human reading the file expects.
 pub fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.max(0.0).powf(1.0 / 2.4) - 0.055 }
+}
+
+/// Shortest decimal that still round-trips to the same value at this many
+/// places. A fitted set is thousands of rows long and a person should still
+/// be able to read one.
+fn num(v: f32, places: usize) -> String {
+    // A nonzero extent that rounds to zero would fail validation on reload.
+    // Widen rather than emit a number the file cannot legally contain.
+    let mut places = places;
+    while places < 12 && v != 0.0 && format!("{v:.places$}").parse::<f32>() == Ok(0.0) {
+        places += 1;
+    }
+    let mut s = format!("{v:.places$}");
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    if s == "-0" { "0".into() } else { s }
+}
+
+impl MathSet {
+    /// Written by hand rather than by a serializer, so that one primitive is
+    /// one line and the file stays legible at any length.
+    pub fn to_text(&self) -> String {
+        let mut o = String::with_capacity(self.splats.len() * 72 + 256);
+        o.push_str("{\n");
+        o.push_str(&format!("  \"mathset\": {},\n", self.mathset));
+        o.push_str(&format!("  \"canvas\": [{}, {}],\n", self.canvas[0], self.canvas[1]));
+        o.push_str(&format!("  \"space\": {:?},\n", self.space));
+        o.push_str(&format!(
+            "  \"bg\": [{}, {}, {}],\n",
+            num(self.bg[0], 5),
+            num(self.bg[1], 5),
+            num(self.bg[2], 5)
+        ));
+        o.push_str(&format!("  \"primitive\": {:?},\n", self.primitive));
+        o.push_str("  \"splats\": [\n");
+        for (i, s) in self.splats.iter().enumerate() {
+            // x y sx sy theta | r g b a | beta
+            o.push_str("    [");
+            for (k, v) in s.iter().enumerate() {
+                if k > 0 {
+                    o.push_str(", ");
+                }
+                o.push_str(&num(*v, if k == 8 || k == 9 { 4 } else { 5 }));
+            }
+            o.push(']');
+            if i + 1 < self.splats.len() {
+                o.push(',');
+            }
+            o.push('\n');
+        }
+        o.push_str("  ]\n}\n");
+        o
+    }
+
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        std::fs::write(path, self.to_text()).map_err(|e| format!("{}: {e}", path.display()))
+    }
 }
