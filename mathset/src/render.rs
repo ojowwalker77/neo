@@ -268,22 +268,20 @@ pub fn read_canvas(gpu: &Gpu, tex: &wgpu::Texture, w: u32, h: u32) -> Result<Vec
     Ok(rgba)
 }
 
-pub struct Rendered {
-    pub w: u32,
-    pub h: u32,
-    pub rgba: Vec<u8>,
-}
-
-pub fn render(ms: &MathSet, w: u32, h: u32) -> Result<Rendered, String> {
-    let gpu = Gpu::new()?;
-    let rgba = render_with(&gpu, ms, w, h)?;
-    Ok(Rendered { w, h, rgba })
-}
-
-pub fn render_with(gpu: &Gpu, ms: &MathSet, w: u32, h: u32) -> Result<Vec<u8>, String> {
+/// `limit` draws only the first N primitives — the set is an ordered sequence,
+/// so a prefix of it is a valid set in its own right: the same image, earlier.
+pub fn render_with(
+    gpu: &Gpu,
+    ms: &MathSet,
+    w: u32,
+    h: u32,
+    limit: Option<usize>,
+) -> Result<Vec<u8>, String> {
     let pass = SplatPass::new(&gpu.device);
 
-    let gpu_splats: Vec<GpuSplat> = ms.iter_splats().map(|s| GpuSplat::new(&s)).collect();
+    let n = limit.unwrap_or(usize::MAX).min(ms.splats.len());
+    let gpu_splats: Vec<GpuSplat> =
+        ms.iter_splats().take(n).map(|s| GpuSplat::new(&s)).collect();
     // a zero-length storage buffer is invalid; one inert entry keeps the empty
     // set renderable (it must produce the bare background, not an error)
     let upload = if gpu_splats.is_empty() {

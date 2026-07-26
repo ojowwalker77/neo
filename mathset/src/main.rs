@@ -19,7 +19,12 @@ use std::path::PathBuf;
 const USAGE: &str = "\
 usage:
   mathset render <in.mathset> <out.png> [--scale N] [--size WxH]
+                 [--limit N] [--steps N]
   mathset fit <image> <out.mathset> [options]
+
+render options:
+  --limit N        draw only the first N primitives
+  --steps N        write N frames, 1 primitive to all, as out-0001.png ...
 
 fit options:
   --max-side N     working resolution, long edge          (default 1024)
@@ -62,6 +67,8 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
     let mut output: Option<PathBuf> = None;
     let mut scale: f32 = 1.0;
     let mut size: Option<(u32, u32)> = None;
+    let mut limit: Option<usize> = None;
+    let mut steps: Option<usize> = None;
 
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -81,6 +88,18 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
                     b.parse().map_err(|_| format!("--size height {b:?}"))?,
                 ));
             }
+            "--limit" => {
+                let v = it.next().ok_or("--limit needs a number")?;
+                limit = Some(v.parse().map_err(|_| format!("--limit {v:?}"))?);
+            }
+            "--steps" => {
+                let v = it.next().ok_or("--steps needs a number")?;
+                let n: usize = v.parse().map_err(|_| format!("--steps {v:?}"))?;
+                if n == 0 {
+                    return Err("--steps must be at least 1".into());
+                }
+                steps = Some(n);
+            }
             _ if input.is_none() => input = Some(a.into()),
             _ if output.is_none() => output = Some(a.into()),
             _ => return Err(format!("unexpected argument {a:?}")),
@@ -96,16 +115,40 @@ fn cmd_render(args: &[String]) -> Result<(), String> {
         ((ms.canvas[1] as f32 * scale).round() as u32).max(1),
     ));
 
-    let out = render::render(&ms, w, h)?;
-    save_png(&output, &out.rgba, out.w, out.h)?;
+    let gpu = render::Gpu::new()?;
 
+    if let Some(n) = steps {
+        // The set is an ordered sequence, so every prefix of it is a complete
+        // set in its own right. Stepping through the prefixes shows an image
+        // being assembled out of its own description.
+        let total = ms.splats.len();
+        let stem = output.with_extension("");
+        let stem = stem.to_string_lossy();
+        for i in 0..n {
+            // geometric, because the first few primitives carry far more of
+            // the image than the last few thousand
+            let t = (i + 1) as f64 / n as f64;
+            let k = ((total as f64).powf(t).round() as usize).clamp(1, total);
+            let rgba = render::render_with(&gpu, &ms, w, h, Some(k))?;
+            let path = PathBuf::from(format!("{stem}-{:04}.png", i + 1));
+            save_png(&path, &rgba, w, h)?;
+            println!("  {k:>7} / {total} primitives -> {}", path.display());
+        }
+        return Ok(());
+    }
+
+    let rgba = render::render_with(&gpu, &ms, w, h, limit)?;
+    save_png(&output, &rgba, w, h)?;
+
+    let drawn = limit.unwrap_or(ms.splats.len()).min(ms.splats.len());
     println!(
-        "{} splats · {}x{} reference · rendered {}x{} -> {}",
+        "{} of {} splats · {}x{} reference · rendered {}x{} -> {}",
+        drawn,
         ms.splats.len(),
         ms.canvas[0],
         ms.canvas[1],
-        out.w,
-        out.h,
+        w,
+        h,
         output.display()
     );
     Ok(())
@@ -177,7 +220,7 @@ fn cmd_fit(args: &[String]) -> Result<(), String> {
     // file cannot actually deliver — the file is the deliverable, so the file
     // is what gets measured.
     let saved = MathSet::load(&output)?;
-    let back = render::render_with(&gpu, &saved, rep.w, rep.h)?;
+    let back = render::render_with(&gpu, &saved, rep.w, rep.h, None)?;
     let db = fit::psnr(&rep.target, &back);
     let bytes = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
 

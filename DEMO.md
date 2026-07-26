@@ -169,6 +169,34 @@ curves, because in the description they were never pixels at all.
 
 The kept fits and their numbers live in [fits/](fits/).
 
+---
+
+## 6 · Watching it assemble
+
+**2026-07-26**
+
+The set is an *ordered* sequence — first primitive painted first. Which means
+every prefix of the file is itself a complete, valid set. Drawing the first
+three primitives is not a partial render; it is a whole, smaller description.
+
+```bash
+cd mathset && cargo run --release -- render out.mathset build.png --steps 40
+```
+
+Forty frames, from a handful of ellipses to the finished image, spaced
+geometrically because the first few primitives carry far more of the picture
+than the last few thousand. A single frame at any depth:
+
+```bash
+cd mathset && cargo run --release -- render out.mathset one.png --limit 60
+```
+
+Sixty numbers-rows in, the photograph is already recognisable. That is the
+clearest statement of what a math set is: not a compressed picture, but a
+description that is *complete at every length*, and merely gets more specific.
+
+---
+
 **What is honestly wrong with this result:** 24,886 primitives for 230,461
 pixels is one primitive per nine pixels. That is too dense to call a
 description of the image. The cause is structural — greedy placement can never
