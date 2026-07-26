@@ -4,3 +4,4 @@ target/
 *.png
 !assets/*.png
 !fits/*.png
+!docs/img/*.png

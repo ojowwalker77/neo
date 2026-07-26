@@ -23,6 +23,8 @@ entire image.
 cd mathset && cargo run --release -- render sets/five.mathset out.png
 ```
 
+![five primitives](docs/img/five.png)
+
 Each row is one soft ellipse:
 
 ```
@@ -52,8 +54,13 @@ Same file. Render it eight times larger:
 ```bash
 cd mathset && cargo run --release -- render sets/five.mathset big.png --scale 8
 ```
-
 4096×4096. Zoom all the way into any edge — it is clean.
+
+![a picture enlarged versus a description re-evaluated](docs/img/resolution.png)
+
+Left is the honest limit of a picture: the 512 render with its pixels blown up
+ten times. Right is the same region of the same file, evaluated at 4096. The
+curve on the right was never stored anywhere.
 
 This is the part that matters. Nothing was upscaled or interpolated. There was
 no 512×512 image to enlarge; there were five equations, and they were evaluated
@@ -85,6 +92,8 @@ how abruptly it ends.
 ```bash
 cd mathset && cargo run --release -- render sets/beta.mathset out.png --scale 3
 ```
+
+![the shape exponent, 0.5 to 12](docs/img/beta.png)
 
 Five primitives, identical in position, size, and colour. Only `β` differs —
 `0.5, 1, 2, 4, 12` from left to right. They run from a long-tailed blur through
@@ -148,6 +157,8 @@ cd mathset && cargo run --release -- fit ../assets/whiterabbit.jpg out.mathset -
 
 3.4 seconds. **24,886 primitives, 30.86 dB.**
 
+![source photograph beside its reconstruction](docs/img/rabbit-fit.png)
+
 That number is measured the hard way: the emitted file is reloaded from disk
 and decoded by the ordinary decoder — the one that has never seen the
 photograph — and *that* is compared against the source. Nothing the fitter
@@ -166,6 +177,8 @@ The photograph now renders at 1804×2044 — four times the resolution it was
 fitted at. Not upscaled. The primitives were re-evaluated at the finer
 sampling, and edges that were two pixels wide in the source are now smooth
 curves, because in the description they were never pixels at all.
+
+![the same crop three ways](docs/img/rabbit-detail.png)
 
 The kept fits and their numbers live in [fits/](fits/).
 
@@ -186,6 +199,8 @@ cd mathset && cargo run --release -- render out.mathset build.png --steps 40
 Forty frames, from a handful of ellipses to the finished image, spaced
 geometrically because the first few primitives carry far more of the picture
 than the last few thousand. A single frame at any depth:
+
+![the image assembling from 3 primitives to 24,886](docs/img/assembly.png)
 
 ```bash
 cd mathset && cargo run --release -- render out.mathset one.png --limit 60
