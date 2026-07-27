@@ -252,6 +252,147 @@ that is *complete at every length*, and merely gets more specific.
 
 ---
 
+## The math
+
+Everything above rests on one formula and one compositing rule. Both are short
+enough to state here in full. [docs/math.md](docs/math.md) carries the
+derivations.
+
+### The primitive
+
+A **primitive** is an ellipse with a soft edge. It has its own coordinate
+frame, rotated by `θ` and scaled by `σx` and `σy`, and a point is measured in
+that frame in units of standard deviations:
+
+```
+d = p − μ                            offset from the primitive's centre
+
+u = (  d.x·cos θ + d.y·sin θ ) / σx
+v = ( −d.x·sin θ + d.y·cos θ ) / σy
+```
+
+Undoing the rotation and dividing by the extents turns an ellipse in canvas
+space into a circle in `(u, v)` space. The primitive's value there depends only
+on distance from its centre:
+
+```
+G(u, v) = exp( −½ · (u² + v²)^β )
+```
+
+- `β = 1` is an ordinary **Gaussian** — the bell curve. Smooth everywhere,
+  and therefore unable to produce a hard edge.
+- `β > 1` squares the edge off. `β = 12` gives a transition **13× narrower**
+  than a Gaussian's, approaching a hard-edged disc.
+- `β < 1` gives longer tails than a Gaussian. Expensive, and rarely useful.
+
+For `β = 1` this is the familiar multivariate Gaussian written differently.
+With the **covariance matrix** `Σ = R(θ)·diag(σx², σy²)·R(θ)ᵀ`, it happens
+that `u² + v² = dᵀΣ⁻¹d`, so `G(p) = exp(−½ dᵀΣ⁻¹d)`. The file stores
+`(σx, σy, θ)` instead of `Σ` because each of those three numbers means
+something on its own, and keeping the extents positive is a bound on one
+number rather than a constraint on a matrix.
+
+### Compositing
+
+Each primitive's **opacity** at a point is its peak opacity `a` scaled by the
+falloff, and primitives are laid down in file order with the standard *over*
+operator:
+
+```
+α  = a · G(u, v)
+
+C₀ = background
+Cₖ = αₖ · cₖ + (1 − αₖ) · Cₖ₋₁
+```
+
+This does not commute — swapping two overlapping primitives changes the
+result. That is why the file stores a **sequence**, not a set, and why
+section 6 works at all.
+
+### Colour
+
+Colours are **stored** sRGB-encoded and **composited in linear light**.
+
+*Linear light* means values proportional to actual photons; *sRGB* is the
+non-linear encoding your screen and every image file use, which spends more
+precision on darks because eyes do. Blending is only physically correct in
+linear light, but a file should be legible, so the conversion happens at the
+boundary:
+
+```
+srgb → linear:   c ≤ 0.04045   ?  c / 12.92  :  ((c + 0.055) / 1.055)^2.4
+linear → srgb:   c ≤ 0.0031308 ?  12.92 · c  :  1.055 · c^(1/2.4) − 0.055
+```
+
+### The envelope
+
+A Gaussian never reaches zero, so drawing has to stop somewhere. The cutoff is
+derived rather than picked: draw the primitive only where it could still change
+an 8-bit output, which is where it exceeds half a code value, `ε = 1/510`.
+
+```
+exp(−½ r^{2β}) ≥ ε    ⟹    r ≤ (−2 ln ε)^{1/2β}  ≈  12.4688^{1/2β}
+```
+
+For `β = 1` that is 3.53σ; for `β = 12`, 1.11σ. A sharper primitive gets a
+tighter footprint automatically.
+
+### Coordinates
+
+Positions and extents are **normalized** against the long edge of the
+reference canvas, so a 1200×260 image spans `x ∈ [0,1]`, `y ∈ [0,0.217]`.
+Nothing in the file refers to a pixel. To render at `W × H`, pick a scale
+`unit` in pixels per normalized unit; pixel `(i, j)` then samples the
+description at `((i+0.5)/unit, (j+0.5)/unit)`. Doubling the output resolution
+doubles `unit`, and every fragment re-evaluates `G` — which is the whole of
+section 2.
+
+### Reading the numbers
+
+Fidelity is quoted as **PSNR** in decibels — peak signal-to-noise ratio, over
+the 0–255 sRGB channels:
+
+```
+MSE  = mean over all pixels and channels of (a − b)²
+PSNR = 10 · log₁₀( 255² / MSE )
+```
+
+It is a logarithmic scale: **+6 dB halves the RMS error**, +3 dB halves the
+mean squared error. Rough
+guide for what a figure means:
+
+| PSNR | what it looks like |
+|---|---|
+| ~20 dB | obviously wrong |
+| ~30 dB | recognisable, visibly soft — where the fitter is today |
+| ~40 dB | hard to tell from the source at normal viewing |
+| 50 dB+ | differences are rounding, not content |
+
+Two figures appear throughout and they measure different things. The **round
+trip** compares a decoded `.mathset` against the *source photograph* — how good
+the description is. **Conformance** compares two decoders against *each other*
+on the same file — whether the image is a property of the file rather than of a
+renderer. The first is 30.86 dB and improving; the second is 56–62 dB and is
+supposed to stay there.
+
+### Glossary
+
+| term | meaning |
+|---|---|
+| **math set** | a `.mathset` file: a complete description of an image as numbers plus a rule |
+| **primitive** | one entry — one soft ellipse. Called `splats` in the file, for the technique it comes from |
+| **σ** (`sx`, `sy`) | standard deviation: the primitive's extent along its own axes, before rotation |
+| **θ** (`theta`) | rotation of the primitive's own axes, in radians |
+| **β** (`beta`) | shape exponent — how abruptly the edge falls. 1 is a Gaussian |
+| **α** (`a`) | opacity at the centre, before the falloff is applied |
+| **envelope** | how far out a primitive is worth drawing, in σ |
+| **paint order** | the file's order, which is the composite order, which is not reorderable |
+| **greedy placement** | the fitter's method: propose, keep what improves, never revisit |
+| **round trip** | fit → save → reload → decode → compare against the source |
+| **decoder** | reads a set and paints it. Never sees a source image |
+
+---
+
 ## Where it stands
 
 | stage | state |
