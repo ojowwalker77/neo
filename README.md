@@ -307,8 +307,66 @@ cd mathset && cargo run --release -- gradcheck ../assets/whiterabbit.jpg tiny.ma
 ```
 
 **What is still wrong:** the count is fixed. Refinement cannot add a primitive
-where the image needs one, or delete one that has become useless. That is the
-next stage, and it is where the density should fall much further.
+where the image needs one, or delete one that has become useless. That is what
+section 8 goes after.
+
+---
+
+## 8 · How few is enough
+
+**2026-07-26**
+
+Refinement can move the primitives that exist but not change how many there
+are. It cannot add one where the image needs it, and it cannot drop one that
+has become useless. Both are available for almost nothing, because the
+backward walk already knows what every primitive is worth.
+
+Removing a primitive shifts the image by a quantity the walk already computes,
+so the exact loss it earns its place with falls out with no extra pass:
+
+```
+dC     = T_k · a_k · ( c_k - C_{k-1} )
+worth  = dot(dC, dC) - dot(dC, dL/dC_N)
+```
+
+Positive means it pays for itself. Zero means it contributes nothing. Negative
+means removing it would *improve* the image. And a primitive whose accumulated
+positional gradient is large is being pulled in conflicting directions — one
+primitive asked to cover two things — so it splits in two.
+
+```bash
+cd mathset && cargo run --release -- refine ../assets/whiterabbit.jpg in.mathset out.mathset \
+  --iters 900 --adapt --count 2500
+```
+
+![24,886 placed primitives beside 2,381 adapted ones](docs/img/parsimony.png)
+
+**10.5× fewer primitives than placement alone, for a slightly better image.**
+
+| | primitives | round trip | pixels per primitive |
+|---|---:|---:|---:|
+| placed only | 24,886 | 30.86 dB | 9 |
+| placed + refined | 4,000 | 30.99 dB | 58 |
+| **placed + refined + adapted** | **2,381** | **31.12 dB** | **97** |
+
+![fidelity against primitive count](docs/img/parsimony-curve.png)
+
+The worth score is checked against reality the same way the gradients are —
+predicted loss increase against the loss actually measured after removing the
+primitive. Worst relative error **0.1%** across four orders of magnitude. It is
+exact, not a heuristic that happens to work.
+
+This matters more than the fidelity. A set with a primitive every nine pixels
+is pixels in disguise: it would reconstruct perfectly and be useless for
+everything downstream, because nothing in it corresponds to anything in the
+image. A primitive every 97 pixels is starting to be a description — and
+whether these primitives are stable enough to *persist* from one frame to the
+next is the question the whole project turns on.
+
+**What is still missing:** splitting is the only way to add. A primitive can
+divide, but nothing introduces one into a region that has none, so anything
+placement missed entirely stays missed.
+[docs/parsimony.md](docs/parsimony.md) has the method and the failure modes.
 
 ---
 
@@ -449,6 +507,7 @@ supposed to stay there.
 | **paint order** | the file's order, which is the composite order, which is not reorderable |
 | **greedy placement** | the fitter's method: propose, keep what improves, never revisit |
 | **refinement** | gradient descent on the parameters of primitives that already exist |
+| **worth** | the exact loss increase that removing a primitive would cause |
 | **transmittance** | `Π(1−α)` for everything painted over a primitive — how much of it still shows |
 | **round trip** | fit → save → reload → decode → compare against the source |
 | **decoder** | reads a set and paints it. Never sees a source image |
@@ -462,9 +521,9 @@ supposed to stay there.
 | `.mathset` format | defined |
 | decoder — math in, image out | working, cross-verified |
 | fitter — image in, math out | working |
-| gradient refinement | working, 6.2x fewer primitives at equal fidelity |
-| splitting and pruning | next |
-| two-frame persistence | not started |
+| gradient refinement | working |
+| splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
+| two-frame persistence | **next — the real test** |
 | temporal curves | not started |
 
 The two-frame stage is the real test of the thesis. Everything before it is
@@ -477,6 +536,7 @@ to prove, and what would count as it failing.
 - [docs/math.md](docs/math.md) — the primitive, compositing, colour, and the derivations
 - [docs/fitting.md](docs/fitting.md) — how an image becomes a set, and what was measured
 - [docs/refining.md](docs/refining.md) — the gradients, and how they are checked
+- [docs/parsimony.md](docs/parsimony.md) — what a primitive is worth, and how few are needed
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 - [fits/LOG.md](fits/LOG.md) — kept fits, their settings and their numbers

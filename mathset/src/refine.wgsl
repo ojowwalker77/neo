@@ -35,6 +35,7 @@ struct R {
 @group(0) @binding(5) var<uniform> P: R;
 
 const STRIDE: u32 = 10u;     // x y sx sy theta r g b a beta
+const GSTRIDE: u32 = 11u;    // the ten gradients, plus what the primitive is worth
 const ENV_K: f32 = 12.468822;
 const T_FLOOR: f32 = 1e-4;   // below this a primitive is buried; its gradient is ~0
 
@@ -119,26 +120,33 @@ fn backward(@builtin(global_invocation_id) gid: vec3<u32>) {
         let e = eval(k, p);
         if (!e.hit) { continue; }
         let b = k * STRIDE;
+        let gb = k * GSTRIDE;
         let c = colour(k);
 
         let Tn = Tr * (1.0 - e.alpha);          // transmittance behind
         let Un = U + Tr * e.alpha * c;
         let behind = (C - Un) / max(Tn, T_FLOOR);
 
+        // What this primitive earns: removing it would shift the pixel by dC,
+        // and the resulting change in loss is exactly this. Positive means it
+        // pays for itself; at or below zero it is dead weight.
+        let dC = Tr * e.alpha * (c - behind);
+        add_grad(gb + 10u, dot(dC, dC) - dot(dC, dLdC));
+
         let g = dLdC * Tr;
-        add_grad(b + 5u, g.x * e.alpha);
-        add_grad(b + 6u, g.y * e.alpha);
-        add_grad(b + 7u, g.z * e.alpha);
+        add_grad(gb + 5u, g.x * e.alpha);
+        add_grad(gb + 6u, g.y * e.alpha);
+        add_grad(gb + 7u, g.z * e.alpha);
 
         let dL_dalpha = dot(g, c - behind);
-        add_grad(b + 8u, dL_dalpha * e.g);      // stored opacity
+        add_grad(gb + 8u, dL_dalpha * e.g);      // stored opacity
 
         // through the falloff
         let beta = par[b + 9u];
         let dL_dG = dL_dalpha * par[b + 8u];
         if (e.q > 1e-12) {
             let qb = pow(e.q, beta);
-            add_grad(b + 9u, dL_dG * e.g * (-0.5 * qb * log(e.q)));
+            add_grad(gb + 9u, dL_dG * e.g * (-0.5 * qb * log(e.q)));
             let dL_dq = dL_dG * e.g * (-0.5 * beta * pow(e.q, beta - 1.0));
 
             // through the primitive's own frame
@@ -149,11 +157,11 @@ fn backward(@builtin(global_invocation_id) gid: vec3<u32>) {
             let dL_du = dL_dq * 2.0 * e.u;
             let dL_dv = dL_dq * 2.0 * e.v;
 
-            add_grad(b + 0u, dL_du * (-ct / sx) + dL_dv * ( st / sy));
-            add_grad(b + 1u, dL_du * (-st / sx) + dL_dv * (-ct / sy));
-            add_grad(b + 2u, dL_du * (-e.u / sx));
-            add_grad(b + 3u, dL_dv * (-e.v / sy));
-            add_grad(b + 4u, dL_du * (e.v * sy / sx) + dL_dv * (-e.u * sx / sy));
+            add_grad(gb + 0u, dL_du * (-ct / sx) + dL_dv * ( st / sy));
+            add_grad(gb + 1u, dL_du * (-st / sx) + dL_dv * (-ct / sy));
+            add_grad(gb + 2u, dL_du * (-e.u / sx));
+            add_grad(gb + 3u, dL_dv * (-e.v / sy));
+            add_grad(gb + 4u, dL_du * (e.v * sy / sx) + dL_dv * (-e.u * sx / sy));
         }
 
         Tr = Tn;

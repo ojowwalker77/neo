@@ -57,7 +57,7 @@ several tiles, so gradients from different tiles land on the same parameters.
 WGSL has no float atomics, so accumulation uses a compare-exchange loop on the
 bit pattern rather than a fixed-point scale that would have needed tuning.
 
-## 4 · Parsimony — **next**
+## 4 · Parsimony — **done**
 
 With placement and refinement both working, ask how few primitives can carry an
 image at a given fidelity.
@@ -69,7 +69,10 @@ for everything downstream, because nothing in it persists or moves coherently.
 
 Low count matters as evidence that the fit found real structure.
 
-## 5 · Two frames — **the real test**
+Done: 2,381 primitives at 31.12 dB against 24,886 at 30.86 — one primitive per
+97 pixels rather than per 9. See [parsimony.md](parsimony.md).
+
+## 5 · Two frames — **next, and the real test**
 
 Fit frame A. Then fit frame B *initialized from A's set*, and measure how much
 had to change.

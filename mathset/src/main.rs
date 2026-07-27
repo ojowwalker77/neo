@@ -23,6 +23,7 @@ usage:
                  [--limit N] [--steps N]
   mathset fit <image> <out.mathset> [options]
   mathset refine <image> <in.mathset> <out.mathset> [--iters N] [--preview P.png]
+                 [--adapt] [--count N] [--prune F] [--cycle N]
 
 render options:
   --limit N        draw only the first N primitives
@@ -276,6 +277,10 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
     let mut preview: Option<PathBuf> = None;
     let mut o = refine::Options::default();
     let mut every = 50u32;
+    let mut adapt = false;
+    let mut count: Option<usize> = None;
+    let mut prune = 0.05f32;
+    let mut cycle = 60u32;
 
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -290,6 +295,10 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
             "--lr-rot" => o.lr_rot = next("--lr-rot")?.parse().map_err(|_| "--lr-rot")?,
             "--lr-beta" => o.lr_beta = next("--lr-beta")?.parse().map_err(|_| "--lr-beta")?,
             "--preview" => preview = Some(next("--preview")?.into()),
+            "--adapt" => adapt = true,
+            "--count" => count = Some(next("--count")?.parse().map_err(|_| "--count")?),
+            "--prune" => prune = next("--prune")?.parse().map_err(|_| "--prune")?,
+            "--cycle" => cycle = next("--cycle")?.parse().map_err(|_| "--cycle")?,
             _ => pos.push(a.into()),
         }
     }
@@ -319,11 +328,24 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
     println!("{} primitives · {w}x{h} · start {before:.2} dB", ms.splats.len());
 
     let start = std::time::Instant::now();
+    let target_count = count.unwrap_or(ms.splats.len());
     for i in 1..=iters {
         r.step(&gpu)?;
-        if i % every == 0 || i == iters {
+
+        // Adapt on a cycle rather than every step: prune and split both
+        // invalidate the optimiser state around the primitives they touch, so
+        // the set needs time to settle before it is judged again. Never on
+        // the last stretch, so the run ends on a refined set.
+        if adapt && i % cycle == 0 && i + cycle <= iters {
+            let (dropped, added) = r.adapt(prune, target_count);
             let db = score(&gpu, &r.to_mathset(&ms))?;
-            println!("  iter {i:>4}/{iters} · {db:.2} dB");
+            println!(
+                "  iter {i:>4}/{iters} · {db:.2} dB · -{dropped} +{added} -> {} primitives",
+                r.len()
+            );
+        } else if i % every == 0 || i == iters {
+            let db = score(&gpu, &r.to_mathset(&ms))?;
+            println!("  iter {i:>4}/{iters} · {db:.2} dB · {} primitives", r.len());
         }
     }
 
@@ -334,8 +356,9 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
         save_png(p, &render::render_with(&gpu, &out, w, h, None)?, w, h)?;
     }
     println!(
-        "{before:.2} -> {after:.2} dB  ({:+.2}) · {} primitives unchanged · {:.1}s",
+        "{before:.2} -> {after:.2} dB  ({:+.2}) · {} -> {} primitives · {:.1}s",
         after - before,
+        ms.splats.len(),
         out.splats.len(),
         start.elapsed().as_secs_f64()
     );
@@ -372,7 +395,7 @@ fn cmd_gradcheck(args: &[String]) -> Result<(), String> {
         // sum one parameter across every primitive: a single perturbation
         // then probes the whole column at once, and any per-primitive sign
         // error fails to cancel
-        let analytic: f64 = (0..ms.splats.len()).map(|k| g[k * 10 + j] as f64).sum();
+        let analytic: f64 = (0..ms.splats.len()).map(|k| g[k * 11 + j] as f64).sum();
         let eps = steps[j];
         for k in 0..ms.splats.len() {
             r.params_mut()[k * 10 + j] += eps;
@@ -390,6 +413,27 @@ fn cmd_gradcheck(args: &[String]) -> Result<(), String> {
         worst = worst.max(rel);
         println!("{:>6} {analytic:>16.4} {fd:>16.4} {rel:>10.5}", names[j]);
     }
+    // The worth score decides what gets pruned, so it gets the same
+    // treatment: predicted loss increase from removing a primitive, against
+    // the loss actually measured after removing it.
+    println!();
+    println!("{:>6} {:>16} {:>16} {:>10}", "prim", "predicted", "actual", "rel err");
+    let worth = r.worth();
+    let base = r.loss();
+    let mut order: Vec<usize> = (0..worth.len()).collect();
+    order.sort_by(|&a, &b| worth[b].partial_cmp(&worth[a]).unwrap_or(std::cmp::Ordering::Equal));
+    let mut worst_w = 0f64;
+    for &k in order.iter().step_by(order.len().max(6) / 6).take(6) {
+        let mut probe = refine::Refiner::new(&gpu, &ms, &target, w, h, refine::Options::default())?;
+        probe.drop_one(k);
+        let actual = probe.loss() - base;
+        let pred = worth[k] as f64;
+        let rel = (pred - actual).abs() / pred.abs().max(actual.abs()).max(1e-9);
+        worst_w = worst_w.max(rel);
+        println!("{k:>6} {pred:>16.5} {actual:>16.5} {rel:>10.5}");
+    }
+    println!("worst worth error {worst_w:.5}");
+
     println!();
     if worst < 0.05 {
         println!("worst relative error {worst:.5} — gradients agree");

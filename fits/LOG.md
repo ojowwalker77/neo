@@ -90,3 +90,55 @@ Notes: still improving at 900 iterations (30.02 dB at 3,000 primitives after
 900, from 29.64 at 300), so these are lower bounds rather than converged
 values. The count is fixed — refinement cannot add a primitive where one is
 needed or drop a useless one, which is what stage 4 is for.
+
+---
+
+## whiterabbit-20260726-adapted
+
+Stage 4. Prune and split during refinement — the count is no longer fixed.
+
+| | |
+|---|---|
+| source | `assets/whiterabbit.jpg`, 451×511 |
+| primitives | 2,381 |
+| round trip | **31.12 dB** |
+| time | 207 s (900 iterations) |
+| file | 211 KB |
+| density | one primitive per 97 pixels |
+
+```bash
+cargo run --release -- fit ../assets/whiterabbit.jpg m.mathset --budget 2500
+cargo run --release -- refine ../assets/whiterabbit.jpg m.mathset out.mathset \
+  --iters 900 --adapt --count 2500
+```
+
+Defaults at the time: refinement as before, plus `--prune 0.05` (share of the
+set retired per cycle, bottom by worth) and `--cycle 60`.
+
+**Against the two baselines above:**
+
+| | primitives | round trip | pixels per primitive |
+|---|---:|---:|---:|
+| placed only | 24,886 | 30.86 dB | 9 |
+| placed + refined | 4,000 | 30.99 dB | 58 |
+| placed + refined + adapted | **2,381** | **31.12 dB** | **97** |
+
+10.5× fewer than placement alone, 1.7× fewer than refinement alone.
+
+Fidelity against count, 900 iterations each:
+
+| primitives | round trip |
+|---:|---:|
+| 953 | 28.39 dB |
+| 1,429 | 29.47 dB |
+| 1,905 | 30.42 dB |
+| 2,381 | 31.12 dB |
+| 3,810 | 33.23 dB |
+
+Notes: still improving at 900 iterations. The worth score that drives pruning
+was checked against measured loss change to 0.1% relative error. Splitting is
+the only way to add a primitive, so anything placement missed entirely stays
+missed — see [docs/parsimony.md](../docs/parsimony.md#known-limitations).
+
+This is the set that stage 5 should start from: the question there is whether
+these 2,381 primitives survive into the next frame.

@@ -19,7 +19,8 @@ use crate::render::Gpu;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-const STRIDE: usize = 10; // x y sx sy theta r g b a beta
+const STRIDE: usize = 10;  // x y sx sy theta r g b a beta
+const GSTRIDE: usize = 11; // the ten gradients, plus what the primitive is worth
 const TILE: u32 = 16;
 
 pub struct Options {
@@ -144,6 +145,7 @@ pub struct Refiner {
     target: Vec<u8>,
     par: Vec<f32>,
     adam: Adam,
+    last_grad: Vec<f32>,
     opt: Options,
 }
 
@@ -266,6 +268,7 @@ impl Refiner {
             target: target.to_vec(),
             par,
             adam: Adam::new(n * STRIDE),
+            last_grad: vec![0.0; n * GSTRIDE],
             opt,
         })
     }
@@ -289,7 +292,7 @@ impl Refiner {
         });
         let b_grad = dev.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("grad"),
-            contents: bytemuck::cast_slice(&vec![0f32; self.n * STRIDE]),
+            contents: bytemuck::cast_slice(&vec![0f32; self.n * GSTRIDE]),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         });
         let b_off = dev.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -332,7 +335,7 @@ impl Refiner {
             ],
         });
 
-        let bytes = (self.n * STRIDE * 4) as u64;
+        let bytes = (self.n * GSTRIDE * 4) as u64;
         let stage = dev.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grad readback"),
             size: bytes,
@@ -361,6 +364,7 @@ impl Refiner {
             bytemuck::cast_slice::<u8, f32>(&d).to_vec()
         };
         stage.unmap();
+        self.last_grad = g.clone();
         Ok(g)
     }
 
@@ -370,8 +374,9 @@ impl Refiner {
         self.adam.t += 1;
         for k in 0..self.n {
             let b = k * STRIDE;
+            let gb = k * GSTRIDE;
             let gr = |i: usize| {
-                let v = g[b + i] * scale;
+                let v = g[gb + i] * scale;
                 if v.is_finite() { v } else { 0.0 }
             };
 
@@ -399,6 +404,118 @@ impl Refiner {
             self.par[b + 3] = self.par[b + 3].clamp(0.3 / self.unit, 0.4);
             self.par[b + 9] = self.par[b + 9].clamp(o.beta_min, o.beta_max);
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.n
+    }
+
+    /// Prune and split in one move, from a single gradient snapshot.
+    ///
+    /// They have to be decided together. Pruning first and then splitting
+    /// would consult gradients belonging to primitives that no longer exist,
+    /// and splitting first would waste the budget on primitives about to be
+    /// dropped.
+    ///
+    /// `frac` is the share of the set retired per cycle, taken from the
+    /// bottom by worth. Gentle and repeated beats aggressive and once: every
+    /// structural change disturbs the optimiser around it, and the set needs
+    /// iterations to settle before it can be judged again.
+    pub fn adapt(&mut self, frac: f32, target: usize) -> (usize, usize) {
+        if self.last_grad.len() < self.n * GSTRIDE || self.n < 8 {
+            return (0, 0);
+        }
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let worth: Vec<f32> = (0..self.n).map(|k| fin(self.last_grad[k * GSTRIDE + 10])).collect();
+
+        // Retire the bottom slice by worth, and anything at or below zero
+        // however many that is — those are paying nothing or actively costing.
+        let mut order: Vec<usize> = (0..self.n).collect();
+        order.sort_by(|&a, &b| worth[a].partial_cmp(&worth[b]).unwrap_or(std::cmp::Ordering::Equal));
+        let quota = ((self.n as f32 * frac) as usize).min(self.n / 2);
+        let mut drop = vec![false; self.n];
+        for (rank, &k) in order.iter().enumerate() {
+            if rank < quota || worth[k] <= 0.0 {
+                drop[k] = true;
+            }
+        }
+        let survivors = self.n - drop.iter().filter(|d| **d).count();
+        if survivors < 4 {
+            return (0, 0);
+        }
+
+        // Spend the freed budget on the survivors being pulled hardest: a
+        // large positional gradient means one primitive is being asked to
+        // cover two things at once.
+        let room = target.saturating_sub(survivors) / 2;
+        let mut rank: Vec<(usize, f32)> = (0..self.n)
+            .filter(|&k| !drop[k])
+            .map(|k| {
+                let gx = fin(self.last_grad[k * GSTRIDE]);
+                let gy = fin(self.last_grad[k * GSTRIDE + 1]);
+                (k, (gx * gx + gy * gy).sqrt())
+            })
+            .collect();
+        rank.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let split: std::collections::HashSet<usize> =
+            rank.iter().take(room).filter(|r| r.1 > 0.0).map(|r| r.0).collect();
+
+        let mut par: Vec<f32> = Vec::with_capacity((survivors + split.len()) * STRIDE);
+        let mut m: Vec<f32> = Vec::with_capacity(par.capacity());
+        let mut v: Vec<f32> = Vec::with_capacity(par.capacity());
+        for k in 0..self.n {
+            if drop[k] {
+                continue;
+            }
+            let src = &self.par[k * STRIDE..(k + 1) * STRIDE];
+            if !split.contains(&k) {
+                par.extend_from_slice(src);
+                // Adam moments are per parameter, so they travel with the
+                // primitive rather than with the slot
+                m.extend_from_slice(&self.adam.m[k * STRIDE..(k + 1) * STRIDE]);
+                v.extend_from_slice(&self.adam.v[k * STRIDE..(k + 1) * STRIDE]);
+                continue;
+            }
+            // two halves, offset along the primitive's own major axis, each
+            // narrower — both take the original's place in the sequence, so
+            // the composite order is undisturbed
+            let (ct, st) = (src[4].cos(), src[4].sin());
+            let along_x = src[2] >= src[3];
+            let major = if along_x { src[2] } else { src[3] };
+            let dir = if along_x { (ct, st) } else { (-st, ct) };
+            for sign in [-1.0f32, 1.0] {
+                let mut c = src.to_vec();
+                c[0] += sign * 0.55 * major * dir.0;
+                c[1] += sign * 0.55 * major * dir.1;
+                if along_x { c[2] /= 1.6 } else { c[3] /= 1.6 }
+                par.extend_from_slice(&c);
+                m.extend(std::iter::repeat_n(0.0, STRIDE)); // fresh state: this primitive is new
+                v.extend(std::iter::repeat_n(0.0, STRIDE));
+            }
+        }
+
+        let dropped = self.n - survivors;
+        let added = par.len() / STRIDE - survivors;
+        self.par = par;
+        self.adam.m = m;
+        self.adam.v = v;
+        self.n = self.par.len() / STRIDE;
+        self.last_grad = vec![0.0; self.n * GSTRIDE];
+        (dropped, added)
+    }
+
+    /// What the kernel says each primitive is worth: the loss increase that
+    /// removing it would cause.
+    pub fn worth(&self) -> Vec<f32> {
+        (0..self.n).map(|k| self.last_grad[k * GSTRIDE + 10]).collect()
+    }
+
+    /// Remove one primitive, for checking a worth score against reality.
+    pub fn drop_one(&mut self, k: usize) {
+        self.par.drain(k * STRIDE..(k + 1) * STRIDE);
+        self.adam.m.drain(k * STRIDE..(k + 1) * STRIDE);
+        self.adam.v.drain(k * STRIDE..(k + 1) * STRIDE);
+        self.n -= 1;
     }
 
     pub fn params_mut(&mut self) -> &mut [f32] {
