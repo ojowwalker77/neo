@@ -32,7 +32,7 @@ Stages 1–4 are done, verified, documented and pushed. See `README.md` sections
 | fitter (greedy placement) | done, 24,886 primitives → 30.86 dB |
 | gradient refinement | done, 4,000 → 30.99 dB (6.2× fewer) |
 | prune + split | done, 2,381 → 31.12 dB (10.5× fewer) |
-| **two-frame persistence** | **in progress — spatially separate translation groups are recovered automatically** |
+| **two-frame persistence** | **in progress — translation and rigid tests pass; real wheel persists through 13 keyframes** |
 | temporal curves | not started |
 
 Verification gates, both should stay green:
@@ -143,26 +143,94 @@ On a two-region synthetic test, it independently recovers +19.96, 0.00 px and
 outside false positives are 32 / 2,215 (1.4%).
 
 This proves a stronger boundary: spatially separate translation groups are
-automatically recoverable. Touching objects with different motion and
-non-translational motion are not.
+automatically recoverable. Touching objects with different motion are not;
+rigid rotation is handled separately below with supplied membership.
+
+## Rigid validation and the real wheel timeline
+
+`track-rigid` now searches a known group's translation and rotation together.
+It rotates primitive centres around the rectangle's centre and also adds the
+group angle to each primitive's own `theta`. It writes a small
+`.motion.json` descriptor with membership, pivot, translation, and angle so
+the path between endpoint mathsets is explicit.
+
+Exact test: fit frame 0 of `assets/wheel.gif`, then use `warp.py` to rotate the
+wheel rectangle by a known +12°. The A set has 2,285 primitives and reconstructs
+at 40.02 dB. At native 512 px search resolution:
+
+| measurement | result |
+|---|---:|
+| true / recovered rotation | +12.000° / +11.988° |
+| recovered translation | 0.00, 0.00 px |
+| median / 90th percentile position error | 0.02 / 0.03 px |
+| median primitive orientation error | 0.012° |
+| outside primitives moved | 0 / 89 |
+
+The saved transition evaluates arcs rather than endpoint chords:
+
+```text
+p_i(t) = c + R(tφ) · (p_i(A) - c) + t·d
+θ_i(t) = θ_i(A) + tφ
+```
+
+Applying only that rigid model to the real GIF was rejected. It rendered an
+almost stationary crisp wheel and did not reproduce the supplied motion.
+
+The accepted real-GIF path keeps the same ordered 2,285 rows across all 13
+frames. Frame 0 is fitted once. Each later state is warm-started from the
+immediately preceding state and refined for 100 iterations at native 512×341
+resolution with position/orientation learning rates at one quarter of their
+defaults and no adaptation, so rows are never added, removed, or reordered.
+Extent, colour, opacity, and edge softness remain free to carry the visible
+radial smear, darkness, and local spoke changes.
+
+| measurement | result |
+|---|---:|
+| primitive count in every state | 2,285 |
+| mean decoded fidelity | 39.73 dB |
+| worst decoded fidelity | 38.16 dB |
+| median adjacent position step | 0.57–0.68 px |
+| 90th percentile adjacent position step | 1.32–1.47 px |
+
+`sample-timeline` evaluates between the 13 states. It uses linear position and
+opacity, shortest-path orientation, geometric positive extents and `β`, and
+linear-light colour. It emits another ordinary mathset; it does not blend
+rendered pixels.
+
+The durable files are:
+
+- `fits/wheel-20260727-rigid-a.mathset`;
+- `fits/wheel-20260727-rigid-b.mathset`;
+- `fits/wheel-20260727-rigid.motion.json`.
+- `fits/wheel-20260727-real/timeline.json`;
+- `fits/wheel-20260727-real/frame-00.mathset` through `frame-12.mathset`.
+
+README section 10 and `docs/motion.md` contain the measurements, visible
+real animation, parameter transition rules, and reproduction commands.
 
 ## What to do next
 
-**1 · Split touching motions.** `track-change` already separates spatially
+**1 · Fit temporal curves to the real wheel timeline.** The persistent
+keyframes work visually and numerically, but storing all 13 states is not yet
+the compact function-of-`t` goal. Fit splines to parameter trajectories, then
+hold out source frames and measure both decoded fidelity and positional drift.
+Do not accept a curve only because the rendered loop looks plausible.
+
+**2 · Attach rigid estimation to inferred groups.** Rotation is currently
+proved with rectangle-supplied membership and pivot. `track-change` discovers
+translation groups but still estimates only translation. Use the changed
+component as a rigid candidate, check that one transform explains it, and
+retain the descriptor only when it beats translation by a meaningful margin.
+
+**3 · Split touching motions.** `track-change` already separates spatially
 disconnected change components. A connected region containing two motions
 still gets one transform. Estimate local correspondence inside it, split where
 displacement disagrees, and merge adjacent pieces whose motion agrees. Keep
 common motion as the discriminating signal; clustering one frame by colour and
 position alone cannot be validated as object identity.
 
-**2 · Generalize the group transform.** Once translation and membership are
-recovered together, add rigid rotation, then affine motion, checking each
-against `warp.py --rotate` and `--scale`. Do not jump straight to the most
-flexible transform; it can hide bad membership the way colour refinement hid
-bad motion.
-
-**3 · Only then temporal curves.** Fitting parameters as functions of `t` is
-meaningless until primitives reliably follow their content.
+**4 · Scale.** Check affine scale against `warp.py --scale`; do not infer it
+from the real wheel, where no exact geometric truth exists.
 
 ## Relevant context for whoever picks this up
 
@@ -210,6 +278,30 @@ cargo run --release -- refine target/mo/b.png target/mo/grouped.mathset \
   target/mo/B-grouped.mathset --iters 200
 python3 tools/persist.py target/mo/A.mathset target/mo/B-grouped.mathset \
   target/mo/truth.json
+```
+
+Recover exact rigid rotation from the wheel frame:
+
+```bash
+cd mathset
+magick ../assets/wheel.gif -coalesce target/wheel/frames/frame-%02d.png
+python3 tools/warp.py target/wheel/frames/frame-00.png \
+  target/wheel/synthetic-rotation \
+  --size 512x341 --patch 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --shift 0,0 --rotate 12
+cargo run --release -- fit target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset --budget 3000 --max-side 512
+cargo run --release -- refine target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset target/wheel/A.mathset \
+  --iters 600 --adapt --count 2400
+cargo run --release -- track-rigid \
+  target/wheel/synthetic-rotation/b.png target/wheel/A.mathset \
+  target/wheel/B.mathset \
+  --rect 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --motion target/wheel/wheel.motion.json \
+  --range 0.02 --angle-range 18 --levels 9 --max-side 512
+python3 tools/persist.py target/wheel/A.mathset target/wheel/B.mathset \
+  target/wheel/synthetic-rotation/truth.json
 ```
 
 The full result, including the negative, failed pyramid, positive group search,

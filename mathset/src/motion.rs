@@ -2,13 +2,64 @@
  *
  * Per-primitive gradients have a local capture radius. This module works above
  * that level: find coherent changed regions in the source frames, estimate one
- * translation per region from frame correspondence, then move every primitive
- * in the region as a unit. Ordinary refinement takes over once the primitives
- * have crossed the large-motion basin.
+ * translation per region from frame correspondence, or search translation and
+ * rotation for a supplied group, then move every primitive in the region as a
+ * unit. Ordinary refinement takes over once the primitives have crossed the
+ * large-motion basin.
  */
 use crate::fit;
 use crate::format::MathSet;
 use crate::render;
+use serde::{Deserialize, Serialize};
+
+pub const MOTION_VERSION: u32 = 0;
+
+/// A compact, executable description of motion between two ordered mathsets.
+///
+/// Coordinates use the same long-edge-normalized space as `.mathset`. Keeping
+/// membership and the transform explicit is important: two endpoint images do
+/// not uniquely determine the path taken between them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MotionSet {
+    pub motion: u32,
+    pub canvas: [u32; 2],
+    pub groups: Vec<MotionGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum MotionGroup {
+    #[serde(rename = "rigid2d")]
+    Rigid2d {
+        members: Vec<usize>,
+        center: [f32; 2],
+        translation: [f32; 2],
+        rotation_rad: f32,
+    },
+}
+
+impl MotionSet {
+    pub fn load(path: &std::path::Path) -> Result<Self, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let motion: Self =
+            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+        if motion.motion != MOTION_VERSION {
+            return Err(format!(
+                "{}: motion version {} — this decoder speaks {MOTION_VERSION}",
+                path.display(),
+                motion.motion
+            ));
+        }
+        Ok(motion)
+    }
+
+    pub fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        std::fs::write(path, format!("{text}\n"))
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Rect {
@@ -80,6 +131,146 @@ pub fn track_group(
         return Err("--rect contains no primitive centres".into());
     }
     track_members(img, ms, &members, output, opt)
+}
+
+/// Search one rigid 2D transform for a known group. The rectangle supplies
+/// membership and the pivot; translation and rotation are recovered from the
+/// target image without reading synthetic truth.
+pub fn track_rigid(
+    img: &image::DynamicImage,
+    ms: &MathSet,
+    rect: Rect,
+    output: &std::path::Path,
+    motion_output: &std::path::Path,
+    opt: Options,
+    angle_range_deg: f32,
+) -> Result<(), String> {
+    let members: Vec<usize> = ms
+        .iter_splats()
+        .enumerate()
+        .filter(|(_, s)| rect.contains(s.x, s.y))
+        .map(|(i, _)| i)
+        .collect();
+    if members.is_empty() {
+        return Err("--rect contains no primitive centres".into());
+    }
+
+    let center = [rect.x + rect.w * 0.5, rect.y + rect.h * 0.5];
+    let (w, h) = render::working_size(ms.canvas, Some(opt.max_side));
+    let target = img
+        .resize_exact(w, h, image::imageops::FilterType::Lanczos3)
+        .to_rgba8()
+        .as_raw()
+        .clone();
+    let gpu = render::Gpu::new()?;
+    let transformed = |tx: f32, ty: f32, angle: f32| {
+        apply_rigid(ms, &members, center, [tx, ty], angle)
+    };
+    let score = |set: &MathSet| -> Result<f64, String> {
+        Ok(fit::psnr(
+            &target,
+            &render::render_with(&gpu, set, w, h, None)?,
+        ))
+    };
+
+    let angle_range = angle_range_deg.to_radians();
+    let mut best = (0.0f32, 0.0f32, 0.0f32);
+    let mut best_db = score(ms)?;
+    let start_db = best_db;
+    let mut move_step = opt.range / 2.0;
+    let mut angle_step = angle_range / 2.0;
+    let start = std::time::Instant::now();
+    for level in 0..opt.levels {
+        let radius = if level == 0 { 2 } else { 1 };
+        let centre = best;
+        for ga in -radius..=radius {
+            for gy in -radius..=radius {
+                for gx in -radius..=radius {
+                    let tx = centre.0 + gx as f32 * move_step;
+                    let ty = centre.1 + gy as f32 * move_step;
+                    let angle = centre.2 + ga as f32 * angle_step;
+                    if tx.abs() > opt.range
+                        || ty.abs() > opt.range
+                        || angle.abs() > angle_range
+                    {
+                        continue;
+                    }
+                    let db = score(&transformed(tx, ty, angle))?;
+                    if db > best_db {
+                        best = (tx, ty, angle);
+                        best_db = db;
+                    }
+                }
+            }
+        }
+        println!(
+            "  level {}/{} · move step {:.3} px · angle step {:.3}° · best {:+.2},{:+.2} px {:+.3}° · {best_db:.2} dB",
+            level + 1,
+            opt.levels,
+            move_step * ms.canvas[0].max(ms.canvas[1]) as f32,
+            angle_step.to_degrees(),
+            best.0 * ms.canvas[0].max(ms.canvas[1]) as f32,
+            best.1 * ms.canvas[0].max(ms.canvas[1]) as f32,
+            best.2.to_degrees(),
+        );
+        move_step /= 2.0;
+        angle_step /= 2.0;
+    }
+
+    let out = transformed(best.0, best.1, best.2);
+    out.save(output)?;
+    let descriptor = MotionSet {
+        motion: MOTION_VERSION,
+        canvas: ms.canvas,
+        groups: vec![MotionGroup::Rigid2d {
+            members: members.clone(),
+            center,
+            translation: [best.0, best.1],
+            rotation_rad: best.2,
+        }],
+    };
+    descriptor.save(motion_output)?;
+
+    let saved = MathSet::load(output)?;
+    let saved_db = score(&saved)?;
+    let unit = ms.canvas[0].max(ms.canvas[1]) as f32;
+    println!(
+        "{} primitives in rigid group · search {}x{} · {start_db:.2} -> {saved_db:.2} dB · {:.1}s",
+        members.len(),
+        w,
+        h,
+        start.elapsed().as_secs_f64()
+    );
+    println!(
+        "translation {:+.5},{:+.5} normalized = {:+.2},{:+.2} reference px · rotation {:+.4}°",
+        best.0,
+        best.1,
+        best.0 * unit,
+        best.1 * unit,
+        best.2.to_degrees()
+    );
+    println!("-> {}", output.display());
+    println!("-> {}", motion_output.display());
+    Ok(())
+}
+
+pub fn apply_rigid(
+    ms: &MathSet,
+    members: &[usize],
+    center: [f32; 2],
+    translation: [f32; 2],
+    rotation_rad: f32,
+) -> MathSet {
+    let mut out = ms.clone();
+    let (ct, st) = (rotation_rad.cos(), rotation_rad.sin());
+    for &i in members {
+        let x = ms.splats[i][0] - center[0];
+        let y = ms.splats[i][1] - center[1];
+        out.splats[i][0] = center[0] + ct * x - st * y + translation[0];
+        out.splats[i][1] = center[1] + st * x + ct * y + translation[1];
+        out.splats[i][4] = ms.splats[i][4] + rotation_rad;
+    }
+    out
 }
 
 /// Search a rigid translation for one known group against the primitive

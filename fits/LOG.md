@@ -180,3 +180,105 @@ Measured against exact synthetic truth: all 295 true members moved, pre-refine
 median position error was 0.40 px, and outside false positives were 0.9%.
 After refinement the median error was 0.66 px, with all 295 still recovered
 and 1.1% outside false positives.
+
+---
+
+## wheel-20260727-rigid
+
+Stage 5 rigid rotation. One ordered 2,285-primitive set fitted to frame 0 of
+`assets/wheel.gif`, its recovered +11.988° endpoint, and the executable rigid
+motion descriptor between them.
+
+| file | role |
+|---|---|
+| `wheel-20260727-rigid-a.mathset` | original positions and orientations, 40.02 dB |
+| `wheel-20260727-rigid-b.mathset` | pure rigid endpoint; 2,196 group rows change `x/y/theta` |
+| `wheel-20260727-rigid.motion.json` | member indices, pivot, translation, and rotation |
+
+Exact truth was synthesized from the first GIF frame:
+
+```bash
+cd mathset
+magick ../assets/wheel.gif -coalesce target/wheel/frames/frame-%02d.png
+python3 tools/warp.py target/wheel/frames/frame-00.png \
+  target/wheel/synthetic-rotation \
+  --size 512x341 --patch 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --shift 0,0 --rotate 12
+cargo run --release -- fit target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset --budget 3000 --max-side 512
+cargo run --release -- refine target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset target/wheel/A.mathset \
+  --iters 600 --adapt --count 2400
+cargo run --release -- track-rigid \
+  target/wheel/synthetic-rotation/b.png target/wheel/A.mathset \
+  target/wheel/B.mathset \
+  --rect 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --motion target/wheel/wheel.motion.json \
+  --range 0.02 --angle-range 18 --levels 9 --max-side 512
+```
+
+| measurement | result |
+|---|---:|
+| true / recovered rotation | +12.000° / +11.988° |
+| recovered translation | 0.00, 0.00 px |
+| median / 90th percentile position error | 0.02 / 0.03 px |
+| median orientation error | 0.012° |
+| outside movement | 0 / 89 primitives |
+
+The motion descriptor evaluates circular position paths and orientation:
+
+```text
+p_i(t) = c + R(tφ) · (p_i(A) - c) + t·d
+θ_i(t) = θ_i(A) + tφ
+```
+
+```bash
+cargo run --release -- transition \
+  ../fits/wheel-20260727-rigid-a.mathset \
+  ../fits/wheel-20260727-rigid-b.mathset \
+  target/wheel-half.mathset --t 0.5 \
+  --motion ../fits/wheel-20260727-rigid.motion.json
+```
+
+---
+
+## wheel-20260727-real
+
+Stage 5 persistent real sequence. All 13 states use the same ordered 2,285
+rows. Frame 0 is the fitted wheel set above; every later state is warm-started
+from the immediately preceding state and refined for 100 iterations at native
+512×341 resolution. Position and orientation learning rates are one quarter of
+their defaults. Adaptation is disabled, so no row is added, removed, or
+reordered.
+
+| | |
+|---|---:|
+| frames | 13 |
+| timing | 12.5 fps / 80 ms |
+| primitives per frame | 2,285 |
+| mean decoded fidelity | 39.73 dB |
+| worst decoded fidelity | 38.16 dB |
+| median adjacent position step | 0.57–0.68 px |
+| 90th percentile adjacent position step | 1.32–1.47 px |
+
+The files are `wheel-20260727-real/frame-00.mathset` through
+`frame-12.mathset`. `wheel-20260727-real/timeline.json` records their order and
+timing.
+
+```bash
+cd mathset
+cargo run --release -- sample-timeline \
+  ../fits/wheel-20260727-real/timeline.json \
+  target/wheel-at-t.mathset --t 0.541666667
+cargo run --release -- render \
+  target/wheel-at-t.mathset target/wheel-at-t.png
+```
+
+The sampler interpolates centres and opacity linearly, orientations along the
+shortest angular path, positive extents and `β` geometrically, and colour in
+linear light. It emits an ordinary mathset rather than blending decoded
+images.
+
+This is intentionally logged as a keyframed result, not a temporal-curve
+result. The next test is whether substantially fewer spline knots can preserve
+both the visible animation and held-out-frame fidelity.

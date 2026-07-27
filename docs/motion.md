@@ -241,6 +241,155 @@ The command verifies row identity and rejects an appearance or shape change.
 The refined B set is evidence for the final frame, but the pure-position B set
 is the endpoint to use for a movement-only transition.
 
+## Rigid rotation
+
+Translation is not enough for a rotating group. A rigid transform must rotate
+both each primitive centre around a shared pivot and the primitive's own axes:
+
+```text
+p_i(t) = c + R(tφ) · (p_i(A) - c) + t·d
+θ_i(t) = θ_i(A) + tφ
+```
+
+`track-rigid` searches translation and angle together. The supplied rectangle
+defines group membership and pivot only; the command does not read synthetic
+truth. It saves both endpoint B and a motion descriptor because A and B alone
+do not uniquely state which arc was taken between them.
+
+The exact test uses frame 0 of `assets/wheel.gif`, rotated +12° by `warp.py`:
+
+```bash
+cd mathset
+magick ../assets/wheel.gif -coalesce target/wheel/frames/frame-%02d.png
+python3 tools/warp.py target/wheel/frames/frame-00.png \
+  target/wheel/synthetic-rotation \
+  --size 512x341 --patch 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --shift 0,0 --rotate 12
+cargo run --release -- fit target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset --budget 3000 --max-side 512
+cargo run --release -- refine target/wheel/synthetic-rotation/a.png \
+  target/wheel/A0.mathset target/wheel/A.mathset \
+  --iters 600 --adapt --count 2400
+cargo run --release -- track-rigid \
+  target/wheel/synthetic-rotation/b.png target/wheel/A.mathset \
+  target/wheel/B.mathset \
+  --rect 0.16015625,0.01953125,0.62890625,0.62890625 \
+  --motion target/wheel/wheel.motion.json \
+  --range 0.02 --angle-range 18 --levels 9 --max-side 512
+python3 tools/persist.py target/wheel/A.mathset target/wheel/B.mathset \
+  target/wheel/synthetic-rotation/truth.json
+```
+
+The 2,285-primitive A set reconstructs the source at 40.02 dB. Of those,
+2,196 centres lie inside the wheel rectangle. The search recovers +11.988°
+with zero translation. Median position error is 0.02 px, the 90th percentile
+is 0.03 px, median orientation error is 0.012°, and all 89 outside primitives
+remain exactly still.
+
+At this resolution the native search matters. A 128 px search found the right
+angle but introduced a 0.88 px translation that improved the downsampled
+score while hurting the native thin spokes. Re-running at `--max-side 512`
+removed that alias. The resolution used to judge a transform must resolve the
+features that constrain it.
+
+The saved transition is executable:
+
+```bash
+cargo run --release -- transition \
+  ../fits/wheel-20260727-rigid-a.mathset \
+  ../fits/wheel-20260727-rigid-b.mathset \
+  target/wheel-half.mathset --t 0.5 \
+  --motion ../fits/wheel-20260727-rigid.motion.json
+```
+
+`transition` validates that applying the descriptor at `t=1` reproduces the
+supplied B endpoint. It rejects a mismatched descriptor rather than silently
+drawing a different path.
+
+### Why rigid-only was rejected for the real GIF
+
+Independent native-resolution rigid fits from A recover angles between
+−0.738° and +0.984°, plus at most a few pixels of frame drift. Across frames
+1–12, rigid motion improves the fixed-A reconstruction from 29.76 to 30.96 dB
+on average. The number improves, but the rendering is still a nearly static
+crisp wheel. It does not reproduce the supplied animation and is not an
+acceptable result.
+
+The visible movement includes changing darkness, radial smear, and local spoke
+shape. Those changes must be represented rather than discarded as residual.
+
+## Persistent timeline for the real wheel GIF
+
+Frame 0 is represented by 2,285 primitives at 40.02 dB. Each following real
+frame is then refined from the immediately preceding mathset for 100 iterations
+at native 512×341 resolution. Position and orientation learning rates are
+reduced to one quarter of their defaults; extent, colour, opacity, and edge
+softness remain unconstrained. Adaptation is disabled: no primitive is added,
+removed, or reordered.
+
+```bash
+cd mathset
+cp target/wheel/A.mathset target/wheel/actual-sequence/frame-00.mathset
+for i in $(seq 1 12); do
+  n=$(printf '%02d' "$i")
+  prev=$(printf '%02d' "$((i-1))")
+  cargo run --release -- refine "target/wheel/frames/frame-$n.png" \
+    "target/wheel/actual-sequence/frame-$prev.mathset" \
+    "target/wheel/actual-sequence/frame-$n.mathset" \
+    --iters 100 --max-side 512 \
+    --lr-pos 0.00005 --lr-rot 0.002
+done
+```
+
+Every reported number reloads and decodes the emitted file:
+
+| frame | decoded fidelity |
+|---:|---:|
+| 0 | 40.02 dB |
+| 1 | 38.76 dB |
+| 2 | 38.54 dB |
+| 3 | 38.92 dB |
+| 4 | 38.16 dB |
+| 5 | 39.35 dB |
+| 6 | 40.33 dB |
+| 7 | 40.00 dB |
+| 8 | 40.04 dB |
+| 9 | 41.31 dB |
+| 10 | 41.35 dB |
+| 11 | 39.77 dB |
+| 12 | 39.90 dB |
+
+Mean fidelity is 39.73 dB and the worst frame is 38.16 dB. Median
+frame-to-frame position change stays between 0.57 and 0.68 px; the 90th
+percentile stays between 1.32 and 1.47 px. Across the full clip the accumulated
+median position change is 2.38 px. A default-learning-rate run scored 0.57 dB
+higher on average but doubled accumulated drift and allowed individual
+primitives to wander almost 19 px by frame 4. The constrained path is kept
+because temporal identity matters more than a small still-frame score.
+
+The durable states are in `fits/wheel-20260727-real/`. Its `timeline.json`
+records the 12.5 fps ordering. Sample it at any normalized `t`:
+
+```bash
+cargo run --release -- sample-timeline \
+  ../fits/wheel-20260727-real/timeline.json \
+  target/wheel-at-t.mathset --t 0.541666667
+cargo run --release -- render \
+  target/wheel-at-t.mathset target/wheel-at-t.png
+```
+
+For consecutive keyframes, `sample-timeline` uses:
+
+- linear position and opacity;
+- the shortest path for orientation;
+- geometric interpolation for positive extents and `β`;
+- linear-light interpolation for colour.
+
+This is an explicit parameter transition, not an image cross-fade. It also is
+not yet a compact temporal curve: all 13 keyframes are retained. The next
+temporal question is how many spline knots reproduce those trajectories
+without losing the visible animation.
+
 ## What this establishes — and what it does not
 
 The experiment establishes the mechanism:
@@ -250,12 +399,18 @@ The experiment establishes the mechanism:
 - ordinary refinement preserves their identity once they arrive;
 - spatially separate changed regions and their shifts can be recovered from the
   two images without consulting truth.
+- a known group can recover rigid rotation and replay it along circular arcs,
+  including each primitive's own orientation.
+- one ordered 2,285-row set can persist through the supplied 13-frame wheel
+  animation while reconstructing every decoded frame at 38.16–41.35 dB.
 
-It does **not** resolve touching objects with different motion, handle rotation
-or scale, or tolerate the low-amplitude full-frame differences of real footage.
-Stage 5 therefore remains in progress. The next task is splitting a connected
-change component where local correspondence disagrees, followed by rigid
-rotation and affine tests against the synthetic harness.
+It does **not** infer rotating membership automatically, resolve touching
+objects with different motion, or reduce the real wheel trajectory to compact
+curves. Stage 5 therefore remains in progress. The next geometric tasks are
+splitting a connected change component where local correspondence disagrees
+and attaching rigid estimation to automatically inferred groups. The wheel's
+next task is curve fitting with held-out-frame error, not another still-image
+fit.
 
 Keep developing this against generated motion. On real footage a plausible
 answer and a correct one are still indistinguishable by eye.

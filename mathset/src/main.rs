@@ -14,6 +14,7 @@ mod format;
 mod motion;
 mod refine;
 mod render;
+mod timeline;
 mod transition;
 
 use format::MathSet;
@@ -29,9 +30,14 @@ usage:
                  [--adapt] [--count N] [--prune F] [--cycle N]
   mathset track-group <image> <in.mathset> <out.mathset> --rect X,Y,W,H
                       [--range F] [--levels N] [--max-side N]
+  mathset track-rigid <image> <in.mathset> <out.mathset> --rect X,Y,W,H
+                      --motion M.json [--range F] [--angle-range DEG]
+                      [--levels N] [--max-side N]
   mathset track-change <frame-a> <frame-b> <in.mathset> <out.mathset>
                        [--threshold N] [--range F] [--levels N] [--max-side N]
   mathset transition <from.mathset> <to.mathset> <out.mathset> --t F
+                     [--motion M.json]
+  mathset sample-timeline <timeline.json> <out.mathset> --t F
 
 render options:
   --limit N        draw only the first N primitives
@@ -63,11 +69,106 @@ fn go() -> Result<(), String> {
         Some("fit") => cmd_fit(&args[1..]),
         Some("refine") => cmd_refine(&args[1..]),
         Some("track-group") => cmd_track_group(&args[1..]),
+        Some("track-rigid") => cmd_track_rigid(&args[1..]),
         Some("track-change") => cmd_track_change(&args[1..]),
         Some("transition") => cmd_transition(&args[1..]),
+        Some("sample-timeline") => cmd_sample_timeline(&args[1..]),
         Some("gradcheck") => cmd_gradcheck(&args[1..]),
         _ => Err(USAGE.into()),
     }
+}
+
+fn cmd_sample_timeline(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut t: Option<f32> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--t" => {
+                let value = it.next().ok_or("--t needs a value")?;
+                t = Some(value.parse().map_err(|_| format!("--t: {value:?}"))?);
+            }
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 2 {
+        return Err(
+            "usage: mathset sample-timeline <timeline.json> <out.mathset> --t F".into(),
+        );
+    }
+    let t = t.ok_or("sample-timeline needs --t F")?;
+    let timeline = timeline::Timeline::load(&pos[0])?;
+    let (out, left, right, local_t) = timeline.sample(&pos[0], t)?;
+    out.save(&pos[1])?;
+    println!(
+        "{} primitives · timeline t={t:.4} · frames {left}->{right} at {local_t:.4}\n-> {}",
+        out.splats.len(),
+        pos[1].display()
+    );
+    Ok(())
+}
+
+fn cmd_track_rigid(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut rect: Option<motion::Rect> = None;
+    let mut motion_output: Option<PathBuf> = None;
+    let mut angle_range = 30.0f32;
+    let mut opt = motion::Options::default();
+
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut next = |w: &str| it.next().ok_or(format!("{w} needs a value")).cloned();
+        match a.as_str() {
+            "--rect" => rect = Some(motion::Rect::parse(&next("--rect")?)?),
+            "--motion" => motion_output = Some(next("--motion")?.into()),
+            "--angle-range" => {
+                angle_range = next("--angle-range")?
+                    .parse()
+                    .map_err(|_| "--angle-range")?;
+                if !angle_range.is_finite() || angle_range <= 0.0 || angle_range > 180.0 {
+                    return Err("--angle-range must be finite and in (0, 180]".into());
+                }
+            }
+            "--range" => {
+                opt.range = next("--range")?.parse().map_err(|_| "--range")?;
+                if !opt.range.is_finite() || opt.range <= 0.0 {
+                    return Err("--range must be positive and finite".into());
+                }
+            }
+            "--levels" => {
+                opt.levels = next("--levels")?.parse().map_err(|_| "--levels")?;
+                if opt.levels == 0 {
+                    return Err("--levels must be positive".into());
+                }
+            }
+            "--max-side" => {
+                opt.max_side = next("--max-side")?.parse().map_err(|_| "--max-side")?;
+                if opt.max_side == 0 {
+                    return Err("--max-side must be positive".into());
+                }
+            }
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 3 {
+        return Err(
+            "usage: mathset track-rigid <image> <in.mathset> <out.mathset> --rect X,Y,W,H --motion M.json"
+                .into(),
+        );
+    }
+    let rect = rect.ok_or("track-rigid needs --rect X,Y,W,H")?;
+    let motion_output = motion_output.ok_or("track-rigid needs --motion M.json")?;
+    let img = image::open(&pos[0]).map_err(|e| format!("{}: {e}", pos[0].display()))?;
+    let ms = MathSet::load(&pos[1])?;
+    motion::track_rigid(
+        &img,
+        &ms,
+        rect,
+        &pos[2],
+        &motion_output,
+        opt,
+        angle_range,
+    )
 }
 
 fn pair(v: &str, what: &str) -> Result<(f32, f32), String> {
@@ -488,12 +589,16 @@ fn cmd_track_change(args: &[String]) -> Result<(), String> {
 fn cmd_transition(args: &[String]) -> Result<(), String> {
     let mut pos: Vec<PathBuf> = Vec::new();
     let mut t: Option<f32> = None;
+    let mut motion_path: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--t" => {
                 let value = it.next().ok_or("--t needs a value")?;
                 t = Some(value.parse().map_err(|_| format!("--t: {value:?}"))?);
+            }
+            "--motion" => {
+                motion_path = Some(it.next().ok_or("--motion needs a path")?.into());
             }
             _ => pos.push(a.into()),
         }
@@ -507,7 +612,12 @@ fn cmd_transition(args: &[String]) -> Result<(), String> {
     let t = t.ok_or("transition needs --t F")?;
     let from = MathSet::load(&pos[0])?;
     let to = MathSet::load(&pos[1])?;
-    let (out, moving) = transition::between(&from, &to, t)?;
+    let (out, moving) = if let Some(path) = motion_path {
+        let descriptor = motion::MotionSet::load(&path)?;
+        transition::between_rigid(&from, &to, &descriptor, t)?
+    } else {
+        transition::between(&from, &to, t)?
+    };
     out.save(&pos[2])?;
     println!(
         "{} primitives · {moving} moving · t={t:.3}\n-> {}",

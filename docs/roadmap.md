@@ -91,9 +91,15 @@ does not fix it.
 A coarse rigid search recovers 2–26 px translation to sub-pixel accuracy when
 group membership is supplied, and ordinary refinement preserves that identity.
 Spatially separate changed regions can now also be inferred directly from the
-two source frames without truth and translated independently. Touching objects
-with different motion and non-translational transforms remain unsolved, so this
-stage is not done. See [motion.md](motion.md).
+two source frames without truth and translated independently. With supplied
+membership and pivot, a joint translation-and-rotation search recovers an exact
++12° wheel test as +11.988°, with 0.02 px median position error, and replays
+the path as circular arcs. The real 13-frame wheel then keeps one ordered
+2,285-row set across every frame and reconstructs the sequence at 39.73 dB
+mean fidelity through an executable keyframed timeline. Automatic rotating
+membership, touching objects with different motion, scale, and compact
+temporal curves remain unsolved, so this stage is not done. See
+[motion.md](motion.md).
 
 ## 6 · Temporal curves
 

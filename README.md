@@ -469,6 +469,68 @@ has the harness, failed pyramid, group searches, and exact boundary.
 
 ---
 
+## 10 · The real wheel GIF as one persistent timeline
+
+**2026-07-27**
+
+[`assets/wheel.gif`](assets/wheel.gif) has 13 frames at 80 ms each. A single
+rigid transform of the crisp first frame was tested and rejected: it produced
+an almost stationary wheel and had nothing to do with the visible blur
+progression. That is not the deliverable.
+
+The real result keeps one ordered set of **2,285 primitives** for the entire
+GIF. Frame 0 is fitted once at 40.02 dB. Every following state is warm-started
+from the preceding state and refined against the next real frame without
+adding, deleting, or reordering a row. Position, extent, orientation, colour,
+opacity, and edge softness are all allowed to evolve because all of them are
+part of the motion visible in this clip.
+
+| original GIF | recovered persistent-primitive timeline |
+|---|---|
+| ![original wheel animation](assets/wheel.gif) | ![wheel animation recovered from persistent mathsets](docs/img/wheel-real-recovered.gif) |
+
+Every image on the right is an ordinary decoder render of its saved mathset.
+The decoder never sees the GIF frame. Across all 13 states:
+
+| measurement | result |
+|---|---:|
+| primitive count, every frame | **2,285** |
+| mean decoded fidelity | **39.73 dB** |
+| worst decoded fidelity | **38.16 dB** |
+| median adjacent position step | **0.57–0.68 px** |
+| 90th percentile adjacent position step | 1.32–1.47 px |
+
+The kept states and their timing live together:
+
+- [`fits/wheel-20260727-real/timeline.json`](fits/wheel-20260727-real/timeline.json)
+- [`fits/wheel-20260727-real/`](fits/wheel-20260727-real/)
+
+The timeline is executable at any `t`, not only at the 13 source times:
+
+```bash
+cd mathset
+cargo run --release -- sample-timeline \
+  ../fits/wheel-20260727-real/timeline.json \
+  target/wheel-at-t.mathset --t 0.541666667
+cargo run --release -- render \
+  target/wheel-at-t.mathset target/wheel-at-t.png
+```
+
+![the same recovered timeline sampled four times between every GIF frame](docs/img/wheel-real-recovered-smooth.gif)
+
+Between two consecutive states, centres and opacity move linearly; orientation
+takes the shortest angular path; positive extents and `β` interpolate in log
+space; and colour interpolates in linear light. The midpoint is therefore
+another explicit mathset, not a pixel cross-fade.
+
+This is still keyframed rather than a compact temporal curve: thirteen states
+are stored, and no claim is made yet that a polynomial or spline can replace
+them. It does establish the prerequisite that one persistent ordered
+description can follow the real animation instead of replaying a static rigid
+component.
+
+---
+
 ## The math
 
 Everything above rests on one formula and one compositing rule. Both are short
@@ -622,14 +684,18 @@ supposed to stay there.
 | fitter — image in, math out | working |
 | gradient refinement | working |
 | splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
-| two-frame persistence | **in progress — spatially separate translation groups are recovered automatically** |
+| two-frame persistence | **working for translation, known-group rotation, and this persistent wheel sequence** |
 | temporal curves | not started |
 
 The two-frame stage is the real test of the thesis. Per-primitive warm starts
 fail beyond a 2–3 px capture radius; change components can now be discovered
-from the frame pair and translated independently across it. Touching motions
-and non-translational transforms remain open. Everything before this stage is
-groundwork. See [docs/roadmap.md](docs/roadmap.md) for what each stage proves.
+from the frame pair and translated independently across it. A known group can
+also recover rigid rotation and replay it along true arcs. The real wheel
+sequence keeps one row identity while all primitive parameters evolve through
+13 executable keyframes. Automatic rigid membership, touching motions, and
+reducing those keyframes to compact temporal curves remain open. Everything
+before this stage is groundwork. See
+[docs/roadmap.md](docs/roadmap.md) for what each stage proves.
 
 ## Documentation
 
@@ -652,8 +718,9 @@ mathset/
   src/render.rs        GPU setup, offscreen target, readback
   src/fit.wgsl         propose, score, reduce
   src/fit.rs           the fitting loop
-  src/motion.rs        change groups and coarse frame correspondence
-  src/transition.rs    evaluate a position field at time t
+  src/motion.rs        change groups, rigid search, and motion descriptors
+  src/transition.rs    evaluate position, rigid, or full-state movement
+  src/timeline.rs      sample persistent keyframed mathsets at time t
   src/refine.wgsl      the backward pass — analytic gradients
   src/refine.rs        binning, Adam, the CPU-side forward for checking
   sets/                hand-written .mathset files
