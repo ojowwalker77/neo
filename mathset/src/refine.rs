@@ -256,7 +256,10 @@ impl Refiner {
             view_tgt: tex.create_view(&Default::default()),
             w,
             h,
-            unit: w.max(h) as f32,
+            // Match the ordinary decoder exactly. At a reduced working size,
+            // rounding the short edge can make max(w,h) differ slightly from
+            // the scale implied by the reference canvas aspect ratio.
+            unit: crate::render::unit_for(ms.canvas, w, h),
             tiles: (w.div_ceil(TILE), h.div_ceil(TILE)),
             bg: [
                 srgb_to_linear(ms.bg[0]),

@@ -72,7 +72,7 @@ Low count matters as evidence that the fit found real structure.
 Done: 2,381 primitives at 31.12 dB against 24,886 at 30.86 — one primitive per
 97 pixels rather than per 9. See [parsimony.md](parsimony.md).
 
-## 5 · Two frames — **next, and the real test**
+## 5 · Two frames — **in progress, and the real test**
 
 Fit frame A. Then fit frame B *initialized from A's set*, and measure how much
 had to change.
@@ -83,8 +83,17 @@ same description. It fails if B's fit wanders off into an unrelated set of
 primitives, which would mean the representation has no temporal identity and
 video is just repeated still-image fitting.
 
-This is cheap to reach and decides whether the rest is worth building. It gets
-its own honest answer either way.
+The first answer is an instructive negative: independent warm-started
+primitives reconstruct frame B but do not track motion beyond a 2–3 px capture
+radius. A plain resolution pyramid preserves the displacement-to-`σ` ratio and
+does not fix it.
+
+A coarse rigid search recovers 2–26 px translation to sub-pixel accuracy when
+group membership is supplied, and ordinary refinement preserves that identity.
+Spatially separate changed regions can now also be inferred directly from the
+two source frames without truth and translated independently. Touching objects
+with different motion and non-translational transforms remain unsolved, so this
+stage is not done. See [motion.md](motion.md).
 
 ## 6 · Temporal curves
 

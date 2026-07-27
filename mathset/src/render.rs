@@ -219,6 +219,18 @@ pub fn unit_for(canvas: [u32; 2], w: u32, h: u32) -> f32 {
     (w as f32 / ext_x).min(h as f32 / ext_y)
 }
 
+pub fn working_size(canvas: [u32; 2], max_side: Option<u32>) -> (u32, u32) {
+    let [rw, rh] = canvas;
+    let long = rw.max(rh);
+    let scale = max_side
+        .map(|side| (side as f32 / long as f32).min(1.0))
+        .unwrap_or(1.0);
+    (
+        ((rw as f32 * scale).round() as u32).max(1),
+        ((rh as f32 * scale).round() as u32).max(1),
+    )
+}
+
 /// Pull a canvas texture back to CPU memory as tightly packed RGBA8.
 pub fn read_canvas(gpu: &Gpu, tex: &wgpu::Texture, w: u32, h: u32) -> Result<Vec<u8>, String> {
     let row = w * 4;
