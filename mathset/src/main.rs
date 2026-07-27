@@ -11,8 +11,10 @@
  */
 mod fit;
 mod format;
+mod motion;
 mod refine;
 mod render;
+mod transition;
 
 use format::MathSet;
 use std::path::PathBuf;
@@ -22,8 +24,14 @@ usage:
   mathset render <in.mathset> <out.png> [--scale N] [--size WxH]
                  [--limit N] [--steps N]
   mathset fit <image> <out.mathset> [options]
-  mathset refine <image> <in.mathset> <out.mathset> [--iters N] [--preview P.png]
+  mathset refine <image> <in.mathset> <out.mathset> [--iters N] [--max-side N]
+                 [--preview P.png]
                  [--adapt] [--count N] [--prune F] [--cycle N]
+  mathset track-group <image> <in.mathset> <out.mathset> --rect X,Y,W,H
+                      [--range F] [--levels N] [--max-side N]
+  mathset track-change <frame-a> <frame-b> <in.mathset> <out.mathset>
+                       [--threshold N] [--range F] [--levels N] [--max-side N]
+  mathset transition <from.mathset> <to.mathset> <out.mathset> --t F
 
 render options:
   --limit N        draw only the first N primitives
@@ -54,6 +62,9 @@ fn go() -> Result<(), String> {
         Some("render") => cmd_render(&args[1..]),
         Some("fit") => cmd_fit(&args[1..]),
         Some("refine") => cmd_refine(&args[1..]),
+        Some("track-group") => cmd_track_group(&args[1..]),
+        Some("track-change") => cmd_track_change(&args[1..]),
+        Some("transition") => cmd_transition(&args[1..]),
         Some("gradcheck") => cmd_gradcheck(&args[1..]),
         _ => Err(USAGE.into()),
     }
@@ -277,6 +288,7 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
     let mut preview: Option<PathBuf> = None;
     let mut o = refine::Options::default();
     let mut every = 50u32;
+    let mut max_side: Option<u32> = None;
     let mut adapt = false;
     let mut count: Option<usize> = None;
     let mut prune = 0.05f32;
@@ -288,6 +300,13 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
         match a.as_str() {
             "--iters" => o.iters = next("--iters")?.parse().map_err(|_| "--iters")?,
             "--every" => every = next("--every")?.parse().map_err(|_| "--every")?,
+            "--max-side" => {
+                let n = next("--max-side")?.parse().map_err(|_| "--max-side")?;
+                if n == 0 {
+                    return Err("--max-side must be positive".into());
+                }
+                max_side = Some(n);
+            }
             "--lr-pos" => o.lr_pos = next("--lr-pos")?.parse().map_err(|_| "--lr-pos")?,
             "--lr-scale" => o.lr_scale = next("--lr-scale")?.parse().map_err(|_| "--lr-scale")?,
             "--lr-colour" => o.lr_colour = next("--lr-colour")?.parse().map_err(|_| "--lr-colour")?,
@@ -308,7 +327,7 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
 
     let img = image::open(&pos[0]).map_err(|e| format!("{}: {e}", pos[0].display()))?;
     let ms = MathSet::load(&pos[1])?;
-    let (w, h) = (ms.canvas[0], ms.canvas[1]);
+    let (w, h) = render::working_size(ms.canvas, max_side);
     let target = img
         .resize_exact(w, h, image::imageops::FilterType::Lanczos3)
         .to_rgba8()
@@ -363,6 +382,138 @@ fn cmd_refine(args: &[String]) -> Result<(), String> {
         start.elapsed().as_secs_f64()
     );
     println!("-> {}", pos[2].display());
+    Ok(())
+}
+
+/// Search a rigid translation for one known group. This deliberately separates
+/// two questions: whether a group move can cross the large-motion basin, and
+/// how groups should be discovered. `--rect` supplies membership for the first
+/// question without pretending that the second one is solved.
+fn cmd_track_group(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut rect: Option<motion::Rect> = None;
+    let mut opt = motion::Options::default();
+
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut next = |w: &str| it.next().ok_or(format!("{w} needs a value")).cloned();
+        match a.as_str() {
+            "--rect" => rect = Some(motion::Rect::parse(&next("--rect")?)?),
+            "--range" => {
+                opt.range = next("--range")?.parse().map_err(|_| "--range")?;
+                if !opt.range.is_finite() || opt.range <= 0.0 {
+                    return Err("--range must be positive and finite".into());
+                }
+            }
+            "--levels" => {
+                opt.levels = next("--levels")?.parse().map_err(|_| "--levels")?;
+                if opt.levels == 0 {
+                    return Err("--levels must be positive".into());
+                }
+            }
+            "--max-side" => {
+                opt.max_side = next("--max-side")?.parse().map_err(|_| "--max-side")?;
+                if opt.max_side == 0 {
+                    return Err("--max-side must be positive".into());
+                }
+            }
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 3 {
+        return Err(
+            "usage: mathset track-group <image> <in.mathset> <out.mathset> --rect X,Y,W,H".into(),
+        );
+    }
+    let rect = rect.ok_or("track-group needs --rect X,Y,W,H")?;
+    let img = image::open(&pos[0]).map_err(|e| format!("{}: {e}", pos[0].display()))?;
+    let ms = MathSet::load(&pos[1])?;
+    motion::track_group(&img, &ms, rect, &pos[2], opt)
+}
+
+/// Infer spatially separate change components directly from the two source
+/// frames, recover one rigid translation per component by frame correspondence,
+/// then apply those transforms to the primitives inside each component.
+fn cmd_track_change(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut threshold = 2u8;
+    let mut opt = motion::Options::default();
+
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut next = |w: &str| it.next().ok_or(format!("{w} needs a value")).cloned();
+        match a.as_str() {
+            "--threshold" => {
+                threshold = next("--threshold")?.parse().map_err(|_| "--threshold")?;
+                if threshold == 0 {
+                    return Err("--threshold must be 1..255".into());
+                }
+            }
+            "--range" => {
+                opt.range = next("--range")?.parse().map_err(|_| "--range")?;
+                if !opt.range.is_finite() || opt.range <= 0.0 {
+                    return Err("--range must be positive and finite".into());
+                }
+            }
+            "--levels" => {
+                opt.levels = next("--levels")?.parse().map_err(|_| "--levels")?;
+                if opt.levels == 0 {
+                    return Err("--levels must be positive".into());
+                }
+            }
+            "--max-side" => {
+                opt.max_side = next("--max-side")?.parse().map_err(|_| "--max-side")?;
+                if opt.max_side == 0 {
+                    return Err("--max-side must be positive".into());
+                }
+            }
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 4 {
+        return Err(
+            "usage: mathset track-change <frame-a> <frame-b> <in.mathset> <out.mathset>".into(),
+        );
+    }
+
+    let a = image::open(&pos[0]).map_err(|e| format!("{}: {e}", pos[0].display()))?;
+    let b = image::open(&pos[1]).map_err(|e| format!("{}: {e}", pos[1].display()))?;
+    let ms = MathSet::load(&pos[2])?;
+    motion::track_changes(&a, &b, &ms, &pos[3], threshold, opt)
+}
+
+/// Evaluate the recovered position field at one time in [0, 1]. The endpoints
+/// must share row identity and differ only in x/y; this is movement, not an
+/// appearance cross-fade.
+fn cmd_transition(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut t: Option<f32> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--t" => {
+                let value = it.next().ok_or("--t needs a value")?;
+                t = Some(value.parse().map_err(|_| format!("--t: {value:?}"))?);
+            }
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 3 {
+        return Err(
+            "usage: mathset transition <from.mathset> <to.mathset> <out.mathset> --t F"
+                .into(),
+        );
+    }
+    let t = t.ok_or("transition needs --t F")?;
+    let from = MathSet::load(&pos[0])?;
+    let to = MathSet::load(&pos[1])?;
+    let (out, moving) = transition::between(&from, &to, t)?;
+    out.save(&pos[2])?;
+    println!(
+        "{} primitives · {moving} moving · t={t:.3}\n-> {}",
+        out.splats.len(),
+        pos[2].display()
+    );
     Ok(())
 }
 
@@ -440,5 +591,28 @@ fn cmd_gradcheck(args: &[String]) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("worst relative error {worst:.5} — gradients disagree"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{motion, render};
+
+    #[test]
+    fn working_size_preserves_aspect_and_never_upscales() {
+        assert_eq!(render::working_size([451, 511], Some(128)), (113, 128));
+        assert_eq!(render::working_size([451, 511], Some(1024)), (451, 511));
+        assert_eq!(render::working_size([1, 511], Some(64)), (1, 64));
+    }
+
+    #[test]
+    fn rectangle_parsing_and_membership_are_explicit() {
+        let r = motion::Rect::parse("0.35,0.25,0.30,0.30").unwrap();
+        assert!(r.contains(0.35, 0.25));
+        assert!(r.contains(0.65, 0.55));
+        assert!(!r.contains(0.34, 0.25));
+        assert!(motion::Rect::parse("0,0,0,1").is_err());
+        assert!(motion::Rect::parse("0,0,NaN,1").is_err());
+        assert!(motion::Rect::parse("0,0,1").is_err());
     }
 }

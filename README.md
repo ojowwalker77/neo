@@ -1,10 +1,13 @@
 # neo
 
-An engine that reads an image and writes down the math that draws it.
+An engine for recovering movement as math: given a video, write a compact set
+of parameters and functions of `t` that reproduce its motion; given that set,
+replay it.
 
-Not a copy of the image — a set of numbers and a rule for evaluating them, from
-which the image can be reconstructed at any resolution, on any machine, without
-the original ever being present.
+The still-image work below is groundwork. A frame first has to become a few
+thousand candidate primitives rather than a pixel grid before it makes sense
+to ask whether those primitives persist and how they move. Image fidelity and
+file size are not the deliverable, and this is not a compression project.
 
 ## The idea
 
@@ -13,11 +16,11 @@ the thing itself. If you can recover the continuous description underneath —
 the shapes, their extents, their colours — then the pixels become one possible
 rendering of it rather than the substance of it.
 
-The test for whether you have actually recovered a description, rather than
-merely compressed a picture, is simple: **fit at one resolution, render at
-another, and see whether real detail appears.** A compressed picture cannot do
-this. It has nothing to draw on. A description can, because it was never made
-of pixels in the first place.
+The first test of the groundwork is whether the result is a description rather
+than merely a copy: **fit at one resolution, render at another, and see whether
+real detail appears.** A compressed picture cannot do this. It has nothing to
+draw on. A description can, because it was never made of pixels in the first
+place.
 
 A video is then a sequence of such descriptions — and the interesting claim is
 that consecutive frames should share most of their primitives, with motion
@@ -157,7 +160,6 @@ decoders, sharing no code:
     psnr                   : 56.05 dB
 
 ── sets/beta.mathset
-    max channel difference : 1 / 255
     psnr                   : 57.66 dB
 ```
 
@@ -182,7 +184,7 @@ photograph.
 
 ```bash
 cd mathset && cargo run --release -- fit ../assets/whiterabbit.jpg out.mathset --preview out.png
-```
+```#15141B#15141B
 
 3.4 seconds. **24,886 primitives, 30.86 dB.**
 
@@ -370,6 +372,103 @@ placement missed entirely stays missed.
 
 ---
 
+## 9 · The image can be right while the movement is wrong
+
+**2026-07-27**
+
+Warm-start frame B from frame A's 2,381 primitives, refine the same rows, and
+the reconstruction reaches **30.90 dB** — essentially the same fidelity as
+frame A. It looks like persistence worked.
+
+It did not. Frame B was synthesized by moving one patch exactly 25.55 px, so
+the primitive displacement can be checked against a known answer. Inside that
+patch the mean recovered displacement was **−0.36 px**, median position error
+was **25.69 px**, and only **6.8%** of primitives moved far enough to be called
+moved. They stayed where they were and changed colour instead.
+
+| true shift | mean recovered displacement | median error |
+|---:|---:|---:|
+| 2.0 px | +1.25 px | 0.89 px |
+| 5.1 px | +1.77 px | 3.72 px |
+| 10.2 px | +0.88 px | 9.42 px |
+| 25.6 px | −0.36 px | 25.69 px |
+
+The capture radius is about one primitive's `σ`: position gradients are local,
+so a primitive cannot feel content that moved much farther than its own
+extent. A plain 1/8→1/4→1/2→full image pyramid does not change that ratio in
+normalized coordinates; measured end to end, it still recovered only
+**+0.78 px** of the 25.55 px shift.
+
+Moving a group as one unit does cross the gap. Comparing the two source frames
+at 128 px finds one changed region containing all 295 true members plus 19
+boundary extras. Sub-pixel frame correspondence then recovers **+25.95 px**
+without reading the truth. After ordinary refinement, all **295/295** true
+members still track the move, median error is **0.66 px**, and **1.1%** of
+outside primitives are false positives.
+
+The actual endpoint sets are kept, not just their plots:
+
+| file | role |
+|---|---|
+| [`fits/whiterabbit-20260727-motion-a.mathset`](fits/whiterabbit-20260727-motion-a.mathset) | original positions |
+| [`fits/whiterabbit-20260727-motion-b.mathset`](fits/whiterabbit-20260727-motion-b.mathset) | recovered second positions; only `x/y` differ |
+| [`fits/whiterabbit-20260727-motion-b-refined.mathset`](fits/whiterabbit-20260727-motion-b-refined.mathset) | second frame after 200 refinement iterations |
+
+These are ordinary decoder renders of the two saved movement endpoints:
+
+| A · original positions | B · recovered second positions |
+|---|---|
+| ![decoded motion A mathset, before movement](docs/img/motion-frame-a.png) | ![decoded motion B mathset, after recovered group movement](docs/img/motion-frame-b.png) |
+
+A is the 2,381-primitive set fitted and adapted against the synthetic
+harness's first frame. `track-change` compared source frames A and B, found the
+changed region and translated 314 rows of that same ordered set by 25.95 px to
+produce the saved mathset B above. No second fit or row matching is hidden
+between these images.
+
+For primitive `i`, the movement between A and B is:
+
+```text
+x_i(t) = x_i(A) + t · (x_i(B) - x_i(A))
+y_i(t) = y_i(A) + t · (y_i(B) - y_i(A))     0 ≤ t ≤ 1
+```
+
+Evaluate that transition into a real intermediate `.mathset`, then render it:
+
+```bash
+cd mathset
+cargo run --release -- transition \
+  ../fits/whiterabbit-20260727-motion-a.mathset \
+  ../fits/whiterabbit-20260727-motion-b.mathset \
+  target/motion-half.mathset --t 0.5
+cargo run --release -- render target/motion-half.mathset target/motion-half.png
+```
+
+`transition` requires identical ordered primitives and rejects changes to
+scale, rotation, colour, opacity, or shape. This example therefore evaluates
+recovered movement rather than cross-fading two unrelated fits.
+
+```bash
+cd mathset
+cargo run --release -- track-change target/mo/a.png target/mo/b.png \
+  target/mo/A.mathset target/mo/grouped.mathset --levels 7
+cargo run --release -- refine target/mo/b.png target/mo/grouped.mathset \
+  target/mo/B.mathset --iters 200
+python3 tools/persist.py target/mo/A.mathset target/mo/B.mathset target/mo/truth.json
+```
+
+Spatially separated regions are handled independently: a two-motion synthetic
+test recovers both translations within **0.48–1.03 px**, with all 166 true
+members moved and 1.4% outside false positives. Touching objects with different
+motion and rotation or affine motion remain open. [docs/motion.md](docs/motion.md)
+has the harness, failed pyramid, group searches, and exact boundary.
+
+| independent warm start | coarse group move, then refinement |
+|---|---|
+| ![expected motion exposed behind scattered per-primitive movement](docs/img/motion-warm.png) | ![recovered group movement covering the expected motion](docs/img/motion-group.png) |
+
+---
+
 ## The math
 
 Everything above rests on one formula and one compositing rule. Both are short
@@ -523,12 +622,14 @@ supposed to stay there.
 | fitter — image in, math out | working |
 | gradient refinement | working |
 | splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
-| two-frame persistence | **next — the real test** |
+| two-frame persistence | **in progress — spatially separate translation groups are recovered automatically** |
 | temporal curves | not started |
 
-The two-frame stage is the real test of the thesis. Everything before it is
-groundwork. See [docs/roadmap.md](docs/roadmap.md) for what each stage is meant
-to prove, and what would count as it failing.
+The two-frame stage is the real test of the thesis. Per-primitive warm starts
+fail beyond a 2–3 px capture radius; change components can now be discovered
+from the frame pair and translated independently across it. Touching motions
+and non-translational transforms remain open. Everything before this stage is
+groundwork. See [docs/roadmap.md](docs/roadmap.md) for what each stage proves.
 
 ## Documentation
 
@@ -537,6 +638,7 @@ to prove, and what would count as it failing.
 - [docs/fitting.md](docs/fitting.md) — how an image becomes a set, and what was measured
 - [docs/refining.md](docs/refining.md) — the gradients, and how they are checked
 - [docs/parsimony.md](docs/parsimony.md) — what a primitive is worth, and how few are needed
+- [docs/motion.md](docs/motion.md) — two-frame persistence, its failure, and grouped motion
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 - [fits/LOG.md](fits/LOG.md) — kept fits, their settings and their numbers
@@ -550,11 +652,15 @@ mathset/
   src/render.rs        GPU setup, offscreen target, readback
   src/fit.wgsl         propose, score, reduce
   src/fit.rs           the fitting loop
+  src/motion.rs        change groups and coarse frame correspondence
+  src/transition.rs    evaluate a position field at time t
   src/refine.wgsl      the backward pass — analytic gradients
   src/refine.rs        binning, Adam, the CPU-side forward for checking
   sets/                hand-written .mathset files
   tools/reference.py   independent CPU implementation, for cross-checking
   tools/verify.sh      build and check everything
+  tools/warp.py        synthetic motion with exact ground truth
+  tools/persist.py     displacement accuracy and motion-field plots
 assets/                test images
 fits/                  kept fits, with the log of what produced them
 docs/

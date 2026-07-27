@@ -142,3 +142,41 @@ missed — see [docs/parsimony.md](../docs/parsimony.md#known-limitations).
 
 This is the set that stage 5 should start from: the question there is whether
 these 2,381 primitives survive into the next frame.
+
+---
+
+## whiterabbit-20260727-motion
+
+Stage 5. One ordered 2,381-primitive set at the original position, after a
+recovered 25.95 px group translation, and after ordinary endpoint refinement.
+
+| file | role |
+|---|---|
+| `whiterabbit-20260727-motion-a.mathset` | original positions |
+| `whiterabbit-20260727-motion-b.mathset` | pure movement endpoint; 314 rows change only `x/y` |
+| `whiterabbit-20260727-motion-b-refined.mathset` | second frame after 200 refinement iterations |
+
+The A→B transition is evaluated per primitive:
+
+```text
+x_i(t) = x_i(A) + t · (x_i(B) - x_i(A))
+y_i(t) = y_i(A) + t · (y_i(B) - y_i(A)),  0 ≤ t ≤ 1
+```
+
+```bash
+cd mathset
+cargo run --release -- transition \
+  ../fits/whiterabbit-20260727-motion-a.mathset \
+  ../fits/whiterabbit-20260727-motion-b.mathset \
+  target/motion-half.mathset --t 0.5
+cargo run --release -- render target/motion-half.mathset target/motion-half.png
+```
+
+`transition` accepts only endpoint pairs with the same metadata, row count,
+ordering, and non-position parameters. It cannot silently turn movement into
+an appearance cross-fade.
+
+Measured against exact synthetic truth: all 295 true members moved, pre-refine
+median position error was 0.40 px, and outside false positives were 0.9%.
+After refinement the median error was 0.66 px, with all 295 still recovered
+and 1.1% outside false positives.
