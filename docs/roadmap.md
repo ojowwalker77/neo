@@ -38,23 +38,26 @@ Watch: reconstruction fidelity, primitive count, and where the primitives
 cluster. If they pile up along edges, `β` is not doing its job and the
 primitive needs another look before stage 5.
 
-## 3 · Gradient refinement — **next**
+## 3 · Gradient refinement — **done**
 
 Greedy placement cannot refine. Once a primitive is down, its parameters are
 fixed for good, and improving the image means adding more primitives on top —
 which inflates the count without improving the description.
 
 Refinement computes `∂L/∂param` analytically for each primitive and descends.
-The same still image should reach the same fidelity with substantially fewer,
-better-placed primitives.
+
+Done: 6.2× fewer primitives at equal fidelity, gradients checked against
+finite differences. See [refining.md](refining.md).
 
 This stage is also a prerequisite rather than an optimization: stage 6 fits
 coefficients of functions, which is not something greedy proposal can do at all.
 
-Likely the point where GPU compute shaders and atomics become necessary, for
-scattered gradient accumulation across overlapping primitives.
+It did need compute shaders and atomics, as expected — a primitive spans
+several tiles, so gradients from different tiles land on the same parameters.
+WGSL has no float atomics, so accumulation uses a compare-exchange loop on the
+bit pattern rather than a fixed-point scale that would have needed tuning.
 
-## 4 · Parsimony
+## 4 · Parsimony — **next**
 
 With placement and refinement both working, ask how few primitives can carry an
 image at a given fidelity.

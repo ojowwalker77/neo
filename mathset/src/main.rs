@@ -11,6 +11,7 @@
  */
 mod fit;
 mod format;
+mod refine;
 mod render;
 
 use format::MathSet;
@@ -21,6 +22,7 @@ usage:
   mathset render <in.mathset> <out.png> [--scale N] [--size WxH]
                  [--limit N] [--steps N]
   mathset fit <image> <out.mathset> [options]
+  mathset refine <image> <in.mathset> <out.mathset> [--iters N] [--preview P.png]
 
 render options:
   --limit N        draw only the first N primitives
@@ -50,6 +52,8 @@ fn go() -> Result<(), String> {
     match args.first().map(String::as_str) {
         Some("render") => cmd_render(&args[1..]),
         Some("fit") => cmd_fit(&args[1..]),
+        Some("refine") => cmd_refine(&args[1..]),
+        Some("gradcheck") => cmd_gradcheck(&args[1..]),
         _ => Err(USAGE.into()),
     }
 }
@@ -265,4 +269,132 @@ fn human(b: u64) -> String {
 fn save_png(path: &std::path::Path, rgba: &[u8], w: u32, h: u32) -> Result<(), String> {
     image::save_buffer(path, rgba, w, h, image::ExtendedColorType::Rgba8)
         .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+fn cmd_refine(args: &[String]) -> Result<(), String> {
+    let mut pos: Vec<PathBuf> = Vec::new();
+    let mut preview: Option<PathBuf> = None;
+    let mut o = refine::Options::default();
+    let mut every = 50u32;
+
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut next = |w: &str| it.next().ok_or(format!("{w} needs a value")).cloned();
+        match a.as_str() {
+            "--iters" => o.iters = next("--iters")?.parse().map_err(|_| "--iters")?,
+            "--every" => every = next("--every")?.parse().map_err(|_| "--every")?,
+            "--lr-pos" => o.lr_pos = next("--lr-pos")?.parse().map_err(|_| "--lr-pos")?,
+            "--lr-scale" => o.lr_scale = next("--lr-scale")?.parse().map_err(|_| "--lr-scale")?,
+            "--lr-colour" => o.lr_colour = next("--lr-colour")?.parse().map_err(|_| "--lr-colour")?,
+            "--lr-alpha" => o.lr_alpha = next("--lr-alpha")?.parse().map_err(|_| "--lr-alpha")?,
+            "--lr-rot" => o.lr_rot = next("--lr-rot")?.parse().map_err(|_| "--lr-rot")?,
+            "--lr-beta" => o.lr_beta = next("--lr-beta")?.parse().map_err(|_| "--lr-beta")?,
+            "--preview" => preview = Some(next("--preview")?.into()),
+            _ => pos.push(a.into()),
+        }
+    }
+    if pos.len() != 3 {
+        return Err("usage: mathset refine <image> <in.mathset> <out.mathset>".into());
+    }
+
+    let img = image::open(&pos[0]).map_err(|e| format!("{}: {e}", pos[0].display()))?;
+    let ms = MathSet::load(&pos[1])?;
+    let (w, h) = (ms.canvas[0], ms.canvas[1]);
+    let target = img
+        .resize_exact(w, h, image::imageops::FilterType::Lanczos3)
+        .to_rgba8()
+        .as_raw()
+        .clone();
+
+    let gpu = render::Gpu::new()?;
+    let iters = o.iters;
+    let mut r = refine::Refiner::new(&gpu, &ms, &target, w, h, o)?;
+
+    // measured the same way everywhere: decode the set with the ordinary
+    // decoder and compare against the source
+    let score = |gpu: &render::Gpu, set: &MathSet| -> Result<f64, String> {
+        Ok(fit::psnr(&target, &render::render_with(gpu, set, w, h, None)?))
+    };
+    let before = score(&gpu, &ms)?;
+    println!("{} primitives · {w}x{h} · start {before:.2} dB", ms.splats.len());
+
+    let start = std::time::Instant::now();
+    for i in 1..=iters {
+        r.step(&gpu)?;
+        if i % every == 0 || i == iters {
+            let db = score(&gpu, &r.to_mathset(&ms))?;
+            println!("  iter {i:>4}/{iters} · {db:.2} dB");
+        }
+    }
+
+    let out = r.to_mathset(&ms);
+    out.save(&pos[2])?;
+    let after = score(&gpu, &out)?;
+    if let Some(p) = &preview {
+        save_png(p, &render::render_with(&gpu, &out, w, h, None)?, w, h)?;
+    }
+    println!(
+        "{before:.2} -> {after:.2} dB  ({:+.2}) · {} primitives unchanged · {:.1}s",
+        after - before,
+        out.splats.len(),
+        start.elapsed().as_secs_f64()
+    );
+    println!("-> {}", pos[2].display());
+    Ok(())
+}
+
+/// Every analytic gradient, against a central finite difference of the same
+/// forward model computed independently on the CPU. A sign error or a missing
+/// chain-rule term shows up here and nowhere else — a wrong gradient still
+/// improves the image, just slowly and in the wrong direction for one
+/// parameter, which no fidelity number would reveal.
+fn cmd_gradcheck(args: &[String]) -> Result<(), String> {
+    let img = image::open(&args[0]).map_err(|e| format!("{}: {e}", args[0]))?;
+    let ms = MathSet::load(std::path::Path::new(&args[1]))?;
+    let (w, h) = (ms.canvas[0], ms.canvas[1]);
+    let target = img
+        .resize_exact(w, h, image::imageops::FilterType::Lanczos3)
+        .to_rgba8()
+        .as_raw()
+        .clone();
+
+    let gpu = render::Gpu::new()?;
+    let mut r = refine::Refiner::new(&gpu, &ms, &target, w, h, refine::Options::default())?;
+    let g = r.gradients(&gpu)?;
+
+    let names = ["x", "y", "sx", "sy", "theta", "r", "g", "b", "alpha", "beta"];
+    let steps = [2e-4f32, 2e-4, 2e-4, 2e-4, 2e-3, 2e-3, 2e-3, 2e-3, 2e-3, 2e-3];
+    println!("{} primitives · {w}x{h}", ms.splats.len());
+    println!("{:>6} {:>16} {:>16} {:>10}", "param", "analytic", "finite diff", "rel err");
+
+    let mut worst = 0f64;
+    for j in 0..10 {
+        // sum one parameter across every primitive: a single perturbation
+        // then probes the whole column at once, and any per-primitive sign
+        // error fails to cancel
+        let analytic: f64 = (0..ms.splats.len()).map(|k| g[k * 10 + j] as f64).sum();
+        let eps = steps[j];
+        for k in 0..ms.splats.len() {
+            r.params_mut()[k * 10 + j] += eps;
+        }
+        let up = r.loss();
+        for k in 0..ms.splats.len() {
+            r.params_mut()[k * 10 + j] -= 2.0 * eps;
+        }
+        let dn = r.loss();
+        for k in 0..ms.splats.len() {
+            r.params_mut()[k * 10 + j] += eps;
+        }
+        let fd = (up - dn) / (2.0 * eps as f64);
+        let rel = (analytic - fd).abs() / analytic.abs().max(fd.abs()).max(1e-9);
+        worst = worst.max(rel);
+        println!("{:>6} {analytic:>16.4} {fd:>16.4} {rel:>10.5}", names[j]);
+    }
+    println!();
+    if worst < 0.05 {
+        println!("worst relative error {worst:.5} — gradients agree");
+        Ok(())
+    } else {
+        Err(format!("worst relative error {worst:.5} — gradients disagree"))
+    }
 }

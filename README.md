@@ -219,8 +219,8 @@ stack another primitive over it, and the count inflates without the
 description improving. See
 [docs/fitting.md](docs/fitting.md#the-honest-limitation).
 
-The next stage is gradient refinement, and the number to watch is not the dB —
-it is the dB *per primitive*.
+The number to watch is not the dB but the dB *per primitive* — which is what
+section 7 goes after.
 
 ---
 
@@ -249,6 +249,66 @@ cd mathset && cargo run --release -- render out.mathset one.png --limit 60
 Sixty rows in, the photograph is already recognisable. That is the clearest
 statement of what a math set is: not a compressed picture, but a description
 that is *complete at every length*, and merely gets more specific.
+
+---
+
+## 7 · Moving the primitives instead of adding more
+
+**2026-07-26**
+
+Section 5 ended with a complaint: 24,886 primitives for 230,461 pixels is too
+dense to call a description. The cause was that greedy placement can never
+adjust a primitive once it is down, so its only way to fix an error is to
+stack another one on top.
+
+Every parameter of the primitive is differentiable — position, extents,
+rotation, colour, opacity, and `β`. So instead of adding primitives, move the
+ones that already exist:
+
+```bash
+cd mathset && cargo run --release -- refine ../assets/whiterabbit.jpg in.mathset out.mathset --iters 900
+```
+
+Nothing is added or removed. The same rows, with better numbers in them.
+
+![the same 8,000 primitives, placed versus refined](docs/img/refine-matched.png)
+
+Identical count, **+5.5 dB**. And the result that actually matters:
+
+![24,886 placed primitives beside 4,000 refined ones](docs/img/refine-density.png)
+
+**6.2× fewer primitives for the same image** — one per 58 pixels instead of
+one per 9. The file goes from 2.1 MB to 358 KB, but the size is a side effect.
+The point is that the set has stopped patching itself and started describing
+something.
+
+The derivatives are closed form — about eighty lines of WGSL, no automatic
+differentiation. The awkward part is that a primitive's influence on the final
+image is scaled by everything painted *over* it, `Π(1−α)`, which is only known
+after the later primitives are seen. That forces a backward walk through the
+composite. [docs/refining.md](docs/refining.md) has the full chain.
+
+**A wrong gradient is the quietest possible bug** — the image still improves,
+because the other nine parameters compensate, so no fidelity number would ever
+reveal it. Every derivative is therefore checked against a central finite
+difference of the same forward model, implemented separately in `f64` on the
+CPU:
+
+```bash
+cd mathset && cargo run --release -- gradcheck ../assets/whiterabbit.jpg tiny.mathset
+```
+
+```
+ param         analytic      finite diff    rel err
+     x        -246.8766        -245.3877    0.00603
+ theta          15.6117          15.8483    0.01493
+  beta          88.3083          88.5451    0.00267
+       ...  worst relative error 0.02316 — gradients agree
+```
+
+**What is still wrong:** the count is fixed. Refinement cannot add a primitive
+where the image needs one, or delete one that has become useless. That is the
+next stage, and it is where the density should fall much further.
 
 ---
 
@@ -388,6 +448,8 @@ supposed to stay there.
 | **envelope** | how far out a primitive is worth drawing, in σ |
 | **paint order** | the file's order, which is the composite order, which is not reorderable |
 | **greedy placement** | the fitter's method: propose, keep what improves, never revisit |
+| **refinement** | gradient descent on the parameters of primitives that already exist |
+| **transmittance** | `Π(1−α)` for everything painted over a primitive — how much of it still shows |
 | **round trip** | fit → save → reload → decode → compare against the source |
 | **decoder** | reads a set and paints it. Never sees a source image |
 
@@ -399,8 +461,9 @@ supposed to stay there.
 |---|---|
 | `.mathset` format | defined |
 | decoder — math in, image out | working, cross-verified |
-| fitter — image in, math out | working, 30.9 dB on the test image |
-| gradient refinement | next |
+| fitter — image in, math out | working |
+| gradient refinement | working, 6.2x fewer primitives at equal fidelity |
+| splitting and pruning | next |
 | two-frame persistence | not started |
 | temporal curves | not started |
 
@@ -413,6 +476,7 @@ to prove, and what would count as it failing.
 - [docs/format.md](docs/format.md) — the `.mathset` file, normatively
 - [docs/math.md](docs/math.md) — the primitive, compositing, colour, and the derivations
 - [docs/fitting.md](docs/fitting.md) — how an image becomes a set, and what was measured
+- [docs/refining.md](docs/refining.md) — the gradients, and how they are checked
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 - [fits/LOG.md](fits/LOG.md) — kept fits, their settings and their numbers
@@ -426,6 +490,8 @@ mathset/
   src/render.rs        GPU setup, offscreen target, readback
   src/fit.wgsl         propose, score, reduce
   src/fit.rs           the fitting loop
+  src/refine.wgsl      the backward pass — analytic gradients
+  src/refine.rs        binning, Adam, the CPU-side forward for checking
   sets/                hand-written .mathset files
   tools/reference.py   independent CPU implementation, for cross-checking
   tools/verify.sh      build and check everything
