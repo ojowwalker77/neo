@@ -524,10 +524,98 @@ space; and colour interpolates in linear light. The midpoint is therefore
 another explicit mathset, not a pixel cross-fade.
 
 This is still keyframed rather than a compact temporal curve: thirteen states
-are stored, and no claim is made yet that a polynomial or spline can replace
-them. It does establish the prerequisite that one persistent ordered
-description can follow the real animation instead of replaying a static rigid
-component.
+are stored, and the sampler interpolates between them. It establishes the
+prerequisite that one persistent ordered description can follow the real
+animation instead of replaying a static rigid component. Section 11 replaces
+the thirteen tables with a function.
+
+---
+
+## 11 · The whole clip as one formula
+
+**2026-07-28**
+
+Thirteen stored states are a description of an animation, but they are still a
+table. Nothing in them says the wheel turns — the turning is implicit in the
+differences between adjacent rows.
+
+Every primitive parameter can instead be written as a function of `t`. This is
+the readable evaluator recovered for a 120-frame test GIF:
+
+![the typeset evaluator recovered for the 120-frame GIF](docs/img/one-formula.png)
+
+The complete model is that evaluator **plus every value of `μ`, `w`, `A`, and
+`B`**. `Copy model` exports all four coefficient tables in a portable capsule.
+Given that model, the decoder can evaluate a frame at any `t` without the
+source GIF. The typeset equation alone is not enough; those recovered numbers
+are the visual.
+
+Two factorisations are stacked. Across primitives, each parameter is
+represented by `R` shared modes with a per-primitive weight — when a wheel
+turns, thousands of primitives move in a few coordinated ways, not thousands of
+independent ways. Across time, each mode is a real Fourier series truncated at
+`H` harmonics, because a GIF loops. Positive extents and `β` are fitted in log
+space, colour in linear light, and orientation along an unwrapped angular path,
+so that no interpolation can produce an invalid primitive.
+
+Applied to the 13 recovered wheel states — 2,285 primitives, one ordered
+identity — and scored by rendering each evaluated program through the ordinary
+decoder and comparing against the real GIF frame:
+
+| model | coefficients | mean fidelity | worst frame |
+|---|---:|---:|---:|
+| 13 stored keyframe states | 296,050 | 39.73 dB | 38.16 dB |
+| **one formula, `H`=6 `R`=12** | 298,610 | **39.73 dB** | **38.16 dB** |
+| one formula, `H`=6 `R`=3 | 91,790 | 35.32 dB | 34.40 dB |
+| one formula, `H`=6 `R`=1 | 45,830 | 33.96 dB | 31.64 dB |
+
+At full rank the formula is a **near-lossless re-encoding** of the recovered
+timeline, not merely a visual approximation. Relative coefficient RMS is
+`3.62 × 10⁻⁸`; after rendering all 13 states, only 110 of 2,269,696 pixels
+differ from the keyframe renders, and the largest RGB difference is 3/255.
+Both source-fidelity measurements round to the same 39.73 dB mean and 38.16 dB
+worst frame.
+
+Two things that table does not say, and both matter.
+
+**At full rank this is not compression.** 298,610 coefficients against 296,050
+stored numbers — very slightly more. What changed is form, not size: a table
+that must be interpolated became a function that can be evaluated. Size only
+falls when `R` is truncated, and it is paid for in fidelity.
+
+**Accuracy between samples is not established.** Fitting on 7 of the 13 states
+and scoring the 6 real GIF frames that were withheld:
+
+| harmonics | train fidelity | unseen fidelity | gap |
+|---|---:|---:|---:|
+| `H`=3 | 37.09 dB | 31.67 dB | **5.42 dB** |
+| `H`=2 | 35.05 dB | 33.40 dB | 1.64 dB |
+
+`H`=3 fits the frames it was given better than `H`=2 and reconstructs the ones
+it was not given *worse*. Extra harmonics buy agreement with the samples by
+bending between them. The honest reading is that the program reproduces the
+sampled states to decoder precision, and is not yet trustworthy at unsampled
+times.
+
+The same extraction run against a local 120-frame GIF, fitted at 32
+motion-aware anchors, produces the `H`=12 `R`=16 program above over 3,000
+primitives. Here the source is on the left and the formula-driven
+reconstruction is on the right:
+
+![the 120-frame source beside its formula-driven reconstruction](docs/img/giphy-formula-recovered.gif)
+
+The settled poses match closely. Fast-motion frames visibly streak in the
+reconstruction in a way the source does not.
+
+The 88 unsampled frames of that clip **have not been scored**, so no fidelity
+number is claimed for it. That measurement is the next gate.
+
+One boundary worth stating plainly: this extraction is not in the `mathset`
+engine. `mathset/src/` contains no Fourier or curve-fitting code — the search
+runs in a local TypeScript playground, and the numbers above were produced by
+driving that extraction and the native decoder together. See
+[docs/temporal.md](docs/temporal.md) for the derivation, the domain choices,
+and the full measurements.
 
 ---
 
@@ -685,7 +773,7 @@ supposed to stay there.
 | gradient refinement | working |
 | splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
 | two-frame persistence | **working for translation, known-group rotation, and this persistent wheel sequence** |
-| temporal curves | not started |
+| temporal curves | **working at sampled times, near-lossless on the wheel; unsampled times unproven** |
 
 The two-frame stage is the real test of the thesis. Per-primitive warm starts
 fail beyond a 2–3 px capture radius; change components can now be discovered
@@ -693,8 +781,14 @@ from the frame pair and translated independently across it. A known group can
 also recover rigid rotation and replay it along true arcs. The real wheel
 sequence keeps one row identity while all primitive parameters evolve through
 13 executable keyframes. Automatic rigid membership, touching motions, and
-reducing those keyframes to compact temporal curves remain open. Everything
-before this stage is groundwork. See
+scale remain open.
+
+Those keyframes now reduce to a single closed-form function of `t`: on the
+wheel it is a near-lossless re-encoding with the same 39.73 dB mean fidelity
+as the table it replaces. It is not yet compression at full rank, and a
+held-out split shows the curve bending between the samples rather than
+generalising, so accuracy at unsampled times is the open gate. Everything
+before the two-frame stage is groundwork. See
 [docs/roadmap.md](docs/roadmap.md) for what each stage proves.
 
 ## Documentation
@@ -705,6 +799,7 @@ before this stage is groundwork. See
 - [docs/refining.md](docs/refining.md) — the gradients, and how they are checked
 - [docs/parsimony.md](docs/parsimony.md) — what a primitive is worth, and how few are needed
 - [docs/motion.md](docs/motion.md) — two-frame persistence, its failure, and grouped motion
+- [docs/temporal.md](docs/temporal.md) — keyframes as one function of `t`, and what it does not prove
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 - [fits/LOG.md](fits/LOG.md) — kept fits, their settings and their numbers

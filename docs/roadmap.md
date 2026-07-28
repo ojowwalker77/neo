@@ -97,18 +97,44 @@ membership and pivot, a joint translation-and-rotation search recovers an exact
 the path as circular arcs. The real 13-frame wheel then keeps one ordered
 2,285-row set across every frame and reconstructs the sequence at 39.73 dB
 mean fidelity through an executable keyframed timeline. Automatic rotating
-membership, touching objects with different motion, scale, and compact
-temporal curves remain unsolved, so this stage is not done. See
-[motion.md](motion.md).
+membership, touching objects with different motion, and scale remain unsolved,
+so this stage is not done. See [motion.md](motion.md).
 
-## 6 · Temporal curves
+## 6 · Temporal curves — **in progress**
 
-Given persistence, a primitive's parameters become functions of `t` — a low
-order polynomial or a few spline knots each.
+Given persistence, a primitive's parameters become functions of `t`.
 
 At that point a clip is not a sequence of descriptions. It is one description
 with time in it, and motion is a handful of coefficients rather than a
 difference between frames.
+
+The basis chosen is not polynomials or splines but `R` shared spatial modes per
+parameter, each modulated by a real Fourier series of `H` harmonics in the loop
+phase — a GIF repeats, so the natural time basis is periodic, and thousands of
+primitives moving coherently are described by a few modes rather than a few
+thousand independent curves.
+
+Two results, in the order they matter.
+
+The first is positive and unambiguous. On the 13-frame wheel the program is a
+**near-lossless re-encoding** of the keyframe timeline: `H`=6, `R`=12, 39.73 dB
+mean and 38.16 dB worst, matching the stored states at the reported precision,
+with `3.62 × 10⁻⁸` relative coefficient RMS. Only 110 of 2,269,696 rendered
+pixels differ, by at most 3/255 in one RGB channel. Truncating to rank 3 gives
+3.2× fewer coefficients at 35.32 dB.
+
+The second is the reason this stage is not done. At full rank the coefficient
+count is very slightly *higher* than storing the keyframes outright — the win
+is form, not size. And a held-out split, fitting 7 of the 13 states and scoring
+the 6 withheld frames, shows `H`=3 reconstructing what it saw at 37.09 dB and
+what it did not at 31.67 dB. The larger model fits its samples better and the
+gaps worse. The curve is interpolating, not generalising.
+
+So the stage has proved that persistence admits a closed form, and has not
+proved that the closed form is right between samples. Scoring the 88 unsampled
+frames of a 120-frame clip is the gate. The extraction also lives in a local
+TypeScript playground rather than in `mathset/`, and has to be reimplemented
+against the engine before it counts as shipped. See [temporal.md](temporal.md).
 
 ## 7 · The exhibit
 

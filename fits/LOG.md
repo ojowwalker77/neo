@@ -282,3 +282,40 @@ images.
 This is intentionally logged as a keyframed result, not a temporal-curve
 result. The next test is whether substantially fewer spline knots can preserve
 both the visible animation and held-out-frame fidelity.
+
+## 2026-07-28 — these 13 states as one closed-form program
+
+Answered, partly, and not with splines. The 13 states above were re-encoded as
+`R` shared spatial modes per parameter modulated by an `H`-harmonic Fourier
+series in the loop phase. Scored by rendering each evaluated program through
+`mathset render` and comparing against the real GIF frame:
+
+| model | coefficients | relative RMS | mean | worst |
+|---|---:|---:|---:|---:|
+| the 13 stored states | 296,050 | — | 39.73 dB | 38.16 dB |
+| `H`=6 `R`=12 | 298,610 | 0.0000% | 39.73 dB | 38.16 dB |
+| `H`=6 `R`=3 | 91,790 | 0.9033% | 35.32 dB | 34.40 dB |
+| `H`=6 `R`=1 | 45,830 | 1.3922% | 33.96 dB | 31.64 dB |
+
+At full rank it is near-lossless and very slightly *larger* than the table it
+replaces, so the result is a change of form rather than compression. Relative
+coefficient RMS is `3.62 × 10⁻⁸`; 110 of 2,269,696 rendered pixels differ from
+the keyframe renders, by at most 3/255 in one RGB channel. Rank 3 is 3.2×
+smaller for 4.4 dB.
+
+Held-out fidelity is the part that is not answered. Fitting on the 7
+even-numbered states and scoring the 6 withheld frames:
+
+| harmonics | train | unseen | gap |
+|---|---:|---:|---:|
+| `H`=3 | 37.09 dB | 31.67 dB | 5.42 dB |
+| `H`=2 | 35.05 dB | 33.40 dB | 1.64 dB |
+
+More harmonics fit the samples better and the gaps worse.
+
+Produced by `scripts/score-formula.mjs`, which drives the TypeScript extraction
+and the native decoder together. Both that script and the extraction it imports
+are untracked, so this row **cannot be reproduced from a clean checkout** — it
+is logged as a measurement taken, not as a standing gate. No coefficient tables
+are kept here yet for the same reason. See
+[../docs/temporal.md](../docs/temporal.md).

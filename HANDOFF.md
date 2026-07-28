@@ -1,6 +1,7 @@
 # Handoff
 
-State of the project, the finding that matters, and what to do next.
+State of the native math engine, the local Neo playground, the findings that
+matter, and what to do next.
 Delete this file whenever it stops being current.
 
 ## What the project is actually for
@@ -21,6 +22,234 @@ Processing code can render a convincingly organic animated creature
 (@yuruyurau's work), so movement is describable by math — the open question is
 whether it can be *recovered* from footage rather than hand-authored forward.
 
+The owner clarified the product goal more concretely after the engine work:
+
+> Given an image or GIF, recover the equations and coefficient tables that
+> build it. Given those equations and tables, reproduce the visual without
+> retaining a copy of the source.
+
+The wheel GIF is a control, not the product. The product is an inverse visual
+compiler.
+
+## Immediate handoff: the local Neo playground
+
+There is now a working local playground at `http://localhost:3000/`. It has two
+directions:
+
+- **IMAGE / GIF → MATH**: upload a real source, watch the native spatial fit,
+  then receive typeset equations plus their complete coefficient tables;
+- **MATH → IMAGE / MOTION**: paste a complete copied Neo model and reproduce
+  it independently.
+
+The playground is deliberately black, sparse, and process-visible. Do not
+replace real progress with fake loading animation. The user specifically wants
+to see placement, tracking, refinement, fidelity, primitive count, and temporal
+extraction while they run.
+
+### Interface rules — the UI was overhauled on 2026-07-28
+
+The previous acid-lime terminal look was replaced with a **monochrome
+instrument**. The rules are load-bearing; keep them:
+
+- **One neutral ramp, no accent hue.** The only colour anywhere on the screen
+  comes from the source frames and the Gaussian reconstruction, so the chrome
+  can never compete with the thing being judged. `rendered-html.test.mjs`
+  asserts the old `#dfff47` / `#e8b33a` never come back.
+- **Emphasis is inversion, not colour.** The primary action is a white block
+  with black text; that is the only loud element. Failures are signalled by
+  structure and position, never by red.
+- **Two type roles, and the split means something.** Sans for chrome and
+  prose, mono with tabular numerals for measured values, filenames, and
+  literal source. Sentence case everywhere — no all-caps, no wide tracking.
+  The display face is KaTeX's own Computer Modern, set at reading size: the
+  interface has no typographic voice so the mathematics can have all of it.
+- **The seam is the progress indicator.** The 1px rule between the viewer and
+  the equations fills as the fit runs (`.seam`, driven by `--progress`). It
+  replaces the old glowing meters. There is exactly one progress affordance.
+- **Layout does not move.** Viewer left, equations right, in both directions.
+  The direction switch changes which half is the input and how the split is
+  weighted; it never reorders the furniture.
+
+Status tokens on the wire are still upper-case (`EXTRACT`, `TEMPORAL BASIS`,
+`EQUATION FIT`, `READY`, `ERROR`) because the logic branches on them.
+`statusText()` maps them to human copy at the point of display — add new
+tokens there rather than shouting at the user.
+
+### Source-control boundary — read this before touching anything
+
+The user explicitly asked to gitignore the playground. The entire local site is
+ignored: `app/`, `scripts/`, `tests/`, `public/`, package/build configuration,
+and `.openai/`.
+
+Their absence from `git status` does **not** mean the playground work is absent.
+It means it exists only in this workspace and is intentionally not part of the
+tracked engine commit. Do not claim it was committed or pushed. Do not remove
+those ignored files, and do not unignore or publish them unless the owner asks.
+
+The playground originally left `README.md` unchanged. On 2026-07-28 the owner
+explicitly asked to document the temporal-formula milestone, so `README.md`,
+`docs/temporal.md`, `docs/roadmap.md`, and `fits/LOG.md` now carry that result
+and its held-out limitation.
+
+### Local architecture
+
+```text
+image / GIF
+    ↓ browser decode worker
+source RGBA frames
+    ↓ local native service, one job at a time
+persistent ordered .mathset states
+    ↓ coefficient-domain transform
+per-primitive parameter trajectories
+    ↓ low-rank spatial modes + Fourier time basis
+μ / w / A / B coefficient tables
+    ↓ Neo model capsule appended as LaTeX comments
+self-contained copy / paste model
+```
+
+Relevant ignored files:
+
+- `app/neo/NeoPlayground.tsx` — full interaction and progress UI;
+- `app/neo/model.ts` — static and temporal equation programs;
+- `app/neo/capsule.ts` — complete portable coefficient payload;
+- `app/neo/renderer.ts` — WebGL2 Gauss2D decoder;
+- `app/neo/gif.ts`, `gif.worker.ts`, `image.worker.ts` — off-main-thread input
+  decoding;
+- `app/neo/anchors.ts` — motion-aware GIF anchor selection;
+- `app/neo/extraction.worker.ts` — temporal basis extraction off the UI thread;
+- `scripts/fit-server.mjs` — local native fitting service on port 3011;
+- `scripts/dev.mjs` — starts the fitter and Vinext app together;
+- `tests/*.test.mjs` — equation, capsule, anchor, GIF, and rendered-app gates.
+
+Run it with:
+
+```bash
+npm run dev
+```
+
+This starts the UI on `http://localhost:3000/` and the native fitter on
+`http://127.0.0.1:3011/`. The app proxies `/api/fit` and
+`/api/fit/health` to that local service. The service requires the release
+binary at `mathset/target/release/mathset`.
+
+### GIF → math: current implementation
+
+The old 120-frame path fitted every frame sequentially and took about
+15 minutes. It now performs native fits only at up to 32 motion-aware anchors:
+
+- anchor density follows measured pixel change, with a small time floor so
+  quiet portions remain covered;
+- the original frame delays become exact sample phases in the temporal fit;
+- only selected frames are encoded to intermediate PNGs;
+- the first state uses greedy placement plus 60 refinement iterations at
+  320 px;
+- subsequent anchors use `track-change` at 192 px / 4 levels, then 30
+  refinement iterations at 320 px;
+- every emitted state is scored consistently at 384 px;
+- if an anchor falls below `max(30 dB, first-frame score − 1.25 dB)`, a
+  20-iteration quality guard runs automatically.
+
+For the 120-frame `assets/giphy.gif` used during development, the selected
+source indices were:
+
+```text
+0, 4, 8, 12, 16, 20, 23, 27, 30, 34, 37, 40, 44, 47, 51, 55,
+58, 62, 66, 70, 74, 78, 82, 86, 90, 94, 98, 102, 106, 111, 115, 119
+```
+
+Temporal extraction currently caps the model at 12 harmonics and rank 16. It
+fits in transformed coefficient space: positive extents/β in log space,
+colour in linear-light space, and orientation on an unwrapped angular path.
+
+This is a mathematically legitimate sampling optimisation, not a hardcoded
+wheel shortcut. However, the 32-anchor formula has **not yet been scored on
+all held-out source frames**. Anchor fidelity and coefficient error are shown;
+full-source reconstruction fidelity is the next critical gate.
+
+The smaller 13-frame wheel control has now been scored. At `H=6`, `R=12`, its
+formula matches the stored timeline's 39.73 dB mean and 38.16 dB worst-frame
+source fidelity. Relative coefficient RMS is `3.62 × 10⁻⁸`; 110 of 2,269,696
+rendered pixels differ from the keyframe renders, by at most 3/255 in one RGB
+channel. This is a near-lossless re-encoding, not compression: the formula uses
+298,610 coefficients for a 296,050-number table.
+
+It also establishes the unresolved boundary. Fit on 7 wheel states and scored
+on the 6 withheld real frames, `H=3` reaches 37.09 dB on training frames and
+31.67 dB unseen; `H=2` reaches 35.05 dB and 33.40 dB. More harmonics fit the
+samples better and the gaps worse. The formula works at sampled times; its
+accuracy between them is not yet established.
+
+### Still image → math: current implementation
+
+PNG, JPEG, and WebP uploads up to 40 MB use one real native spatial fit. A
+still image becomes a genuinely static equation program:
+
+```text
+H = 0
+R = 0
+q̃_i,d = μ_i,d
+I(x,y) = Over_i Gauss2D(q_i)
+```
+
+It does not wrap the image in a fake one-frame motion model. The source is
+decoded off the main thread, the native service solves 3,000 ordered Gaussian
+primitives, and the UI shows a static transport state. The smoke source
+`assets/whiterabbit.jpg` produced 3,000 primitives at 28.35 dB on a 339×384
+canvas. The output is approximate because it is the real Gaussian
+reconstruction, not copied pixels.
+
+### Copy / paste contract
+
+Readable LaTeX is not sufficient to reproduce a visual: the values of
+`μ`, `w`, `A`, and `B` are the actual model. `COPY MODEL` therefore appends a
+versioned `% NEO_MODEL_V1_BEGIN … END` capsule containing every Float32
+coefficient array:
+
+- `means` (`μ`);
+- low-rank per-trajectory `weights` (`w`);
+- Fourier `modeCoefficients` (`A` and `B`);
+- canvas, background, timing, rank, harmonics, fidelity, and source metadata.
+
+Plain header-only LaTeX is rejected as incomplete. A complete pasted capsule
+reconstructs independently of the original upload. Capsule decoding validates
+array lengths, finite values, rank, harmonics, primitive count, and a 48 MB
+coefficient-byte ceiling.
+
+The editor currently exposes only `H`, `R`, `ω`, and `τ`. It is not yet a
+general LaTeX compiler. For an existing bound model, changing equation
+structure without matching new coefficient tables is rejected rather than
+silently generating unrelated output.
+
+### Local verification
+
+The latest local gates are:
+
+```bash
+npm run lint
+npm test
+```
+
+`npm test` performs the production build and 12 tests. Those tests cover the
+wheel timeline, equation recovery, static image programs, complete model
+copy/paste, motion-anchor selection, GIF decoding, server-rendered UI, and
+shipped control data.
+
+The native image endpoint was also exercised end-to-end with
+`assets/whiterabbit.jpg`; it returned one state, phase 0, 3,000 primitives,
+and a complete event.
+
+### Sites / hosting boundary
+
+The playground is **not published in Sites**. `.openai/hosting.json` contains
+no `project_id`.
+
+More importantly, publishing the current UI alone would be dishonest:
+`scripts/fit-server.mjs` spawns the local Rust `mathset` binary, which a Sites
+deployment cannot execute. A hosted version needs the native fitter packaged
+behind a real remote job API (with streaming progress and cancellation), or
+the engine ported to a supported hosted runtime. Do not deploy a UI whose
+upload button cannot reach the real solver.
+
 ## Where it stands
 
 Stages 1–4 are done, verified, documented and pushed. See `README.md` sections
@@ -33,7 +262,7 @@ Stages 1–4 are done, verified, documented and pushed. See `README.md` sections
 | gradient refinement | done, 4,000 → 30.99 dB (6.2× fewer) |
 | prune + split | done, 2,381 → 31.12 dB (10.5× fewer) |
 | **two-frame persistence** | **in progress — translation and rigid tests pass; real wheel persists through 13 keyframes** |
-| temporal curves | not started |
+| temporal curves | local playground prototype works; held-out full-source validation is not done |
 
 Verification gates, both should stay green:
 
@@ -210,27 +439,45 @@ real animation, parameter transition rules, and reproduction commands.
 
 ## What to do next
 
-**1 · Fit temporal curves to the real wheel timeline.** The persistent
-keyframes work visually and numerically, but storing all 13 states is not yet
-the compact function-of-`t` goal. Fit splines to parameter trajectories, then
-hold out source frames and measure both decoded fidelity and positional drift.
-Do not accept a curve only because the rendered loop looks plausible.
+**1 · Validate the extracted formula on every source frame.** The playground
+now fits a low-rank Fourier model from at most 32 anchors, but its displayed
+temporal error is coefficient error at those anchors. Evaluate the equation
+program at every original GIF timestamp, render it through an independent
+decoder, and report full-sequence PSNR plus a per-frame curve. Add anchors or
+rank only when held-out error demands it. Do not accept a formula because the
+loop merely looks plausible.
 
-**2 · Attach rigid estimation to inferred groups.** Rotation is currently
+This is the most important next task. It decides whether the current
+acceleration is a sound inverse model or an under-sampled approximation.
+
+**2 · Make the fitter remotely deployable before publishing Sites.** Preserve
+the truthful streamed stages and cancellation contract. The obvious boundary
+is a job service around the native Rust binary; the hosted UI should upload the
+source, receive NDJSON/SSE progress, and download only recovered math states.
+Do not replace the solver with a fake browser reconstruction to make deployment
+easy.
+
+**3 · Attach rigid estimation to inferred groups.** Rotation is currently
 proved with rectangle-supplied membership and pivot. `track-change` discovers
 translation groups but still estimates only translation. Use the changed
 component as a rigid candidate, check that one transform explains it, and
 retain the descriptor only when it beats translation by a meaningful margin.
+This is also the likely path to better large-motion anchors in arbitrary GIFs.
 
-**3 · Split touching motions.** `track-change` already separates spatially
+**4 · Split touching motions.** `track-change` already separates spatially
 disconnected change components. A connected region containing two motions
 still gets one transform. Estimate local correspondence inside it, split where
 displacement disagrees, and merge adjacent pieces whose motion agrees. Keep
 common motion as the discriminating signal; clustering one frame by colour and
 position alone cannot be validated as object identity.
 
-**4 · Scale.** Check affine scale against `warp.py --scale`; do not infer it
+**5 · Scale.** Check affine scale against `warp.py --scale`; do not infer it
 from the real wheel, where no exact geometric truth exists.
+
+**6 · Decide the repository boundary with the owner.** The playground is
+currently ignored by explicit request. If it becomes the product rather than a
+local experiment, ask before moving it into tracked source, splitting it into
+another repository, committing it, pushing it, or deploying it.
 
 ## Relevant context for whoever picks this up
 
