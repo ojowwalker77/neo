@@ -1,11 +1,17 @@
 # Roadmap
 
 The order here is chosen so that each stage produces something checkable before
-the next one depends on it. The interesting question — whether motion is a
-small function of `t` — sits at stage 5, and everything before it exists to
-make that question answerable.
+the next one depends on it. The research hypothesis — whether movement can be
+recovered as a small function of `t` — begins at stage 5, becomes an explicit
+temporal program at stage 6, and remains open beyond both.
 
 Stages are marked done only when verified, not when written.
+
+The gates are deliberately separate. Reproducing the observed samples
+`I(x,y,t_k)` is the first. Behaving correctly at withheld or otherwise unseen
+times is the second. Remaining meaningful when the program is edited is the
+third. Passing the first does not imply the other two, and none of them can be
+replaced by visual plausibility alone.
 
 ---
 
@@ -67,7 +73,8 @@ to something in the image is a description. A set with 500,000 sub-pixel ones
 is pixels in disguise — it would reconstruct perfectly and would be worthless
 for everything downstream, because nothing in it persists or moves coherently.
 
-Low count matters as evidence that the fit found real structure.
+Low count is evidence against a sub-pixel raster in disguise. It does not prove
+that an individual primitive corresponds to a physical point or semantic part.
 
 Done: 2,381 primitives at 31.12 dB against 24,886 at 30.86 — one primitive per
 97 pixels rather than per 9. See [parsimony.md](parsimony.md).
@@ -77,11 +84,12 @@ Done: 2,381 primitives at 31.12 dB against 24,886 at 30.86 — one primitive per
 Fit frame A. Then fit frame B *initialized from A's set*, and measure how much
 had to change.
 
-The thesis holds if most primitives survive with small parameter changes — if
-the difference between two frames is a modest, structured perturbation of the
-same description. It fails if B's fit wanders off into an unrelated set of
-primitives, which would mean the representation has no temporal identity and
-video is just repeated still-image fitting.
+The hypothesis gains evidence if most primitives survive with structured
+parameter changes and those changes agree with known motion truth. A stable row
+order alone is weaker: B can reconstruct well while rows remain in the wrong
+places or change appearance instead. If B's fit wanders into an unrelated set,
+the representation has no executable temporal identity and video has collapsed
+to repeated still-image fitting.
 
 The first answer is an instructive negative: independent warm-started
 primitives reconstruct frame B but do not track motion beyond a 2–3 px capture
@@ -130,9 +138,12 @@ the 6 withheld frames, shows `H`=3 reconstructing what it saw at 37.09 dB and
 what it did not at 31.67 dB. The larger model fits its samples better and the
 gaps worse. The curve is interpolating, not generalising.
 
-So the stage has proved that persistence admits a closed form, and has not
-proved that the closed form is right between samples. Scoring the 88 unsampled
-frames of a 120-frame clip is the gate. The extraction also lives in a local
+So the stage has proved that this recovered keyframe table can be re-encoded as
+a closed-form program at its sampled times. It has not proved that the program
+is right between samples, that its trajectories are the source's physical
+motion, or that its primitive rows have semantic identity. Scoring the 88
+unsampled frames of a 120-frame clip is the next gate. Controlled interventions
+with expected outcomes come after that. The extraction also lives in a local
 TypeScript playground rather than in `mathset/`, and has to be reimplemented
 against the engine before it counts as shipped. See [temporal.md](temporal.md).
 
@@ -148,6 +159,11 @@ What makes the point, in order of effect:
   of a few dozen ellipses in front of the viewer
 - the same set rendered far beyond its fit resolution, sharp
 - for video, the primitive count held constant while time advances
+- editable `ω` and `τ` controls that change rate, direction, and phase at the
+  program level
+
+Those controls demonstrate executability. They are not, by themselves,
+validation of unseen-time behaviour or meaningful semantic editing.
 
 ---
 
@@ -174,8 +190,10 @@ The motivation is the idea that an image is not fundamentally a grid of
 samples, and that what is on a screen is closer in kind to what reaches an eye
 than it is usually taken to be.
 
-What this project can actually establish is narrower: that images, and simple
-video, are recoverable as compact deterministic descriptions, and that those
-descriptions carry detail their source pixels never contained. That is a real,
-demonstrable result. The larger claim is a direction it points in, not a thing
-it proves, and it is more persuasive stated that way.
+What this project can actually establish is narrower: that sampled images and
+simple video can be approximated by deterministic programs; that those programs
+can imply coherent structure at spatial and temporal coordinates not stored as
+pixels; and, eventually, that controlled edits have predictable consequences.
+Model-implied structure is not source-ground-truth detail, and frame
+reproduction is not physical or semantic recovery. The larger claim is a
+direction to test, not a conclusion, and it is more persuasive stated that way.

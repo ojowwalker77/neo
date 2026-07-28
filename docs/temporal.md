@@ -1,7 +1,7 @@
 # Temporal curves
 
-How a recovered keyframe timeline becomes one closed-form function of `t`, what
-that is worth, and what it does not yet establish.
+How finite video samples `I(x,y,t_k)` become one candidate continuous visual
+program `I(x,y,t)`, what that is worth, and what it does not yet establish.
 
 Read [motion.md](motion.md) first. This document assumes a sequence of
 `.mathset` states that already share one ordered primitive identity — same
@@ -13,13 +13,29 @@ sequence is stage 5; turning it into a formula is stage 6.
 ## The problem
 
 [motion.md](motion.md) ends with 13 stored states for a 13-frame GIF. That is a
-persistent description, but it is still a table. Nothing in it says the wheel
-turns; the turning is implicit in the differences between adjacent rows, and
-reading a value at a time between two stored states means interpolating.
+persistent row-indexed description, but it is still a table. Nothing in it says
+the wheel turns; the turning is implicit in the differences between adjacent
+rows, and reading a value at a time between two stored states means
+interpolating.
 
-Stage 6 asks whether those states are samples of something smooth. If they are,
-the table can be replaced by a function, and the animation becomes one
-description with time in it rather than a sequence of descriptions.
+Stage 6 asks whether one useful smooth program can be recovered from those
+states. A finite sample set never identifies a unique continuous function:
+infinitely many curves can pass through the same values. Replacing the table
+with a function is therefore a model choice to test, not proof that the
+underlying continuous motion has been discovered.
+
+Three evidence levels matter:
+
+1. **Sample reproduction:** the program agrees with observed frames at `t_k`.
+2. **Unseen-time behaviour:** it agrees with withheld frames at times excluded
+   from fitting, then remains coherent where no source sample provides truth.
+3. **Interventional meaning:** edits to time controls, temporal functions, or
+   primitives have predictable, meaningful effects.
+
+The measurements below establish the first level on the wheel, provide
+negative and incomplete evidence for the second, and expose controls relevant
+to the third. They do not establish physical motion or semantic primitive
+identity from frame reproduction alone.
 
 ## The program
 
@@ -68,6 +84,21 @@ not fitted quantities.
 `H` and `R` are the two knobs. `H` is bounded by `floor((frames − 1) / 2)`,
 because that is where a Fourier series stops being determined by the samples.
 `R` is bounded by `frames − 1`.
+
+### Time is part of the program
+
+Because time enters explicitly through `s(t) = 2π(ωt + τ)`, playback controls
+operate on the recovered program rather than on a rendered frame buffer:
+
+- the magnitude of `ω` changes rate and its sign changes direction;
+- `τ` shifts phase, choosing a different point on the loop as the origin;
+- for this periodic basis, `ω = -1` traverses the recovered program backwards.
+
+These controls are implemented by the local evaluator and survive in the
+portable coefficient capsule. They demonstrate that the representation is
+executable and directly controllable. They do **not** prove that a negative
+`ω` reconstructs a physically valid reverse process, or that any newly sampled
+time is correct relative to the source world.
 
 ## Fitting in the right domain
 
@@ -161,7 +192,9 @@ So the correct statement of the current result is narrow:
 - the program **reproduces every sampled state to decoder precision**, with
   the same source fidelity at the reported precision;
 - the program **is not yet established as accurate at unsampled times**, and
-  the evidence points the other way when harmonics are pushed.
+  the evidence points the other way when harmonics are pushed;
+- persistent row indices make the program evaluable, but do **not** establish
+  that a row is one enduring physical point or semantic part.
 
 ### The 120-frame source
 
@@ -181,19 +214,22 @@ the held-out result above, since 88 of those 120 frames are unsampled times.
 
 ## Where the code is
 
-The temporal extraction is **not part of the `mathset` engine.** `mathset/src/`
-contains no Fourier or curve-fitting code; the search is in the local
-playground, in TypeScript:
+The temporal extraction is **not part of the tracked `mathset` engine.**
+`mathset/src/` contains the keyframed timeline sampler and parameter-aware
+transitions, but no Fourier or curve-fitting code. The Fourier search and
+program evaluator are in the local playground, in TypeScript:
 
 - `app/neo/model.ts` — basis extraction, rank truncation, evaluation, and the
   LaTeX rendering of the program;
 - `app/neo/extraction.worker.ts` — runs it off the UI thread;
 - `app/neo/capsule.ts` — the portable coefficient payload.
 
-Those files are deliberately untracked. Anything that is meant to survive has
-to be reimplemented against the Rust engine, and the measurements in this
-document were produced by driving the TypeScript extraction and the native
-decoder together.
+The repository's `.gitignore` excludes those playground files. The public
+research record and Rust engine are tracked here; the temporal program
+extraction described above is local. Anything that is meant to become an
+engine guarantee has to be reimplemented against the Rust engine, and the
+measurements in this document were produced by driving the TypeScript
+extraction and the native decoder together.
 
 ## What would settle it
 
@@ -212,6 +248,9 @@ In rough order of how much each would change the picture:
    another's.
 4. **Test a non-periodic clip.** The Fourier basis assumes the motion loops.
    Every source tried so far does.
-5. **Move the extraction into `mathset`.** While it lives in an untracked
+5. **Test interventions, not only playback.** Controlled edits need expected
+   outcomes, ideally on synthetic scenes with known object and motion
+   structure. A plausible edit is not evidence of semantic identity.
+6. **Move the extraction into `mathset`.** While it lives in an untracked
    playground, none of the numbers above are reproducible from a checkout and
    none of them can be defended by `tools/verify.sh`.

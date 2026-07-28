@@ -1,32 +1,59 @@
 # neo
 
-An engine for recovering movement as math: given a video, write a compact set
-of parameters and functions of `t` that reproduce its motion; given that set,
-replay it.
+Neo is an inverse visual compiler. A video supplies a finite set of samples
+`I(x,y,t_k)`; Neo tries to compile those pixels into an executable,
+inspectable, and editable continuous visual program `I(x,y,t)`.
 
-The still-image work below is groundwork. A frame first has to become a few
-thousand candidate primitives rather than a pixel grid before it makes sense
-to ask whether those primitives persist and how they move. Image fidelity and
-file size are not the deliverable, and this is not a compression project.
+“Recovering movement as math” is the research hypothesis being tested, not a
+result assumed in advance. The still-image work below is groundwork. A frame
+first has to become a few thousand candidate primitives rather than a pixel
+grid before it makes sense to ask whether those primitives persist and how
+they move. Image fidelity and file size are measurements, not the deliverable,
+and this is not primarily a compression project.
 
 ## The idea
 
-Everything on a screen is pixels. But pixels are a *sampling* of something, not
-the thing itself. If you can recover the continuous description underneath —
-the shapes, their extents, their colours — then the pixels become one possible
-rendering of it rather than the substance of it.
+Pixels are samples of a visual signal. A finite set of samples does not
+determine a unique continuous source: many programs can agree at every observed
+pixel and disagree between them. Neo therefore searches for a useful
+description — shapes, extents, colours, and temporal functions — rather than
+claiming to reveal the one true scene hidden behind the pixels.
 
-The first test of the groundwork is whether the result is a description rather
-than merely a copy: **fit at one resolution, render at another, and see whether
-real detail appears.** A compressed picture cannot do this. It has nothing to
-draw on. A description can, because it was never made of pixels in the first
-place.
+The first test of that groundwork is whether the fitted model can be evaluated
+at a different spatial sampling density and still produce coherent,
+resolution-independent structure. Any structure beyond the source sampling is
+**implied by the recovered model**, not newly verified source detail. A
+conventional raster copy must be resampled to change resolution; vector,
+implicit, and other continuous representations can also be re-evaluated. The
+important distinction is the representation, not whether it is compressed.
 
-A video is then a sequence of such descriptions — and the interesting claim is
-that consecutive frames should share most of their primitives, with motion
-appearing as those primitives' parameters changing smoothly over time. Movement
-stops being a difference between two grids of numbers and becomes a small
-function of `t`.
+For video, the stronger hypothesis is that frames can share a persistent
+description whose parameters change as compact functions of `t`. If that holds,
+movement stops being only a difference between two grids of numbers and becomes
+part of an executable program.
+
+## What would count as recovery
+
+There are three different claims, and they should not be collapsed:
+
+1. **Sample reproduction.** Evaluate the program at the observed `t_k` and
+   reproduce the sampled frames.
+2. **Unseen-time behaviour.** Evaluate it at times not used for fitting and
+   match withheld source frames where ground truth exists; beyond those times,
+   behave coherently rather than merely bend through the samples.
+3. **Interventional meaning.** Edit time controls, functions, or primitives and
+   get a predictable change that remains meaningful.
+
+The current evidence is strongest at level 1. Level 2 is explicitly unsettled:
+a held-out wheel experiment gets worse as the temporal basis becomes more
+expressive, and 88 unsampled frames of the longer test clip remain unscored.
+Level 3 is the intended destination, not a completed claim.
+
+Frame reproduction alone proves neither true physical motion nor semantic
+primitive identity. The synthetic translation and supplied rigid-rotation
+experiments below have exact motion truth; the real clips do not. Keeping row
+`i` stable is an executable identity contract, but it does not by itself prove
+that row `i` is the same physical or semantic thing throughout the scene.
 
 That is the direction. It is being built one verified step at a time, and what
 follows is every step that currently works.
@@ -91,13 +118,15 @@ Left is the honest limit of a picture: the 512 render with its pixels blown up
 ten times. Right is the same region of the same file, evaluated at 4096. The
 curve on the right was never stored anywhere.
 
-Nothing was upscaled or interpolated. There was no 512×512 image to enlarge;
-there were five equations, and they were evaluated at sixty-four times as many
-points. The detail at 4096 is not invented and not smoothed — it was always
-implied by the numbers and simply not resolved before.
+There was no 512×512 raster inside the file to enlarge; there were five
+equations, and they were evaluated at sixty-four times as many points. The
+4096 render exposes structure implied by those equations. It does **not** prove
+that the original source contained matching sub-pixel ground-truth detail.
 
-A compressed image cannot do this. It has nothing to draw on. This is the
-difference between a picture *of* something and a description *of* something.
+A conventional raster copy has to be resampled to make a larger raster. A
+continuous representation — including vector graphics, implicit functions, or
+this mathset — can instead be evaluated at the requested coordinates. This
+experiment verifies that property of the model.
 
 To confirm it is not an illusion, the 8× render can be shrunk back down and
 compared against a native 512×512 render:
@@ -184,7 +213,7 @@ photograph.
 
 ```bash
 cd mathset && cargo run --release -- fit ../assets/whiterabbit.jpg out.mathset --preview out.png
-```#15141B#15141B
+```
 
 3.4 seconds. **24,886 primitives, 30.86 dB.**
 
@@ -204,10 +233,11 @@ means:
 cd mathset && cargo run --release -- render out.mathset big.png --scale 4
 ```
 
-The photograph now renders at 1804×2044 — four times the resolution it was
-fitted at. Not upscaled. The primitives were re-evaluated at the finer
-sampling, and edges that were two pixels wide in the source are now smooth
-curves, because in the description they were never pixels at all.
+The photograph model now renders at 1804×2044 — four times the resolution it
+was fitted at. The primitives were re-evaluated at the finer sampling, and
+edges that were two pixels wide in the source become smooth model-implied
+curves. This demonstrates resolution-independent evaluation; it does not
+recover unobserved source detail for which there is no ground truth.
 
 ![the same crop three ways](docs/img/rabbit-detail.png)
 
@@ -485,6 +515,11 @@ adding, deleting, or reordering a row. Position, extent, orientation, colour,
 opacity, and edge softness are all allowed to evolve because all of them are
 part of the motion visible in this clip.
 
+That persistent row order is necessary for an executable trajectory, but it is
+not sufficient evidence that each row tracks one physical surface point or
+semantic part. Section 9 demonstrates exactly why good frame reconstruction
+cannot settle that question.
+
 | original GIF | recovered persistent-primitive timeline |
 |---|---|
 | ![original wheel animation](assets/wheel.gif) | ![wheel animation recovered from persistent mathsets](docs/img/wheel-real-recovered.gif) |
@@ -557,6 +592,13 @@ independent ways. Across time, each mode is a real Fourier series truncated at
 `H` harmonics, because a GIF loops. Positive extents and `β` are fitted in log
 space, colour in linear light, and orientation along an unwrapped angular path,
 so that no interpolation can produce an invalid primitive.
+
+The phase is `s(t) = 2π(ωt + τ)`. These are real program-level controls:
+changing `ω` changes playback rate and its sign changes direction, while `τ`
+selects the starting phase. For a periodic recovered program, `ω = -1`
+traverses the recovered loop backwards. That is a valid intervention on the
+program; it is not evidence that the program predicted physically correct
+unseen frames or a true reverse process in the source world.
 
 Applied to the 13 recovered wheel states — 2,285 primitives, one ordered
 identity — and scored by rendering each evaluated program through the ordinary
@@ -772,16 +814,17 @@ supposed to stay there.
 | fitter — image in, math out | working |
 | gradient refinement | working |
 | splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
-| two-frame persistence | **working for translation, known-group rotation, and this persistent wheel sequence** |
+| two-frame persistence | **verified for synthetic translation and known-group rotation; stable row order on the real wheel** |
 | temporal curves | **working at sampled times, near-lossless on the wheel; unsampled times unproven** |
 
-The two-frame stage is the real test of the thesis. Per-primitive warm starts
-fail beyond a 2–3 px capture radius; change components can now be discovered
-from the frame pair and translated independently across it. A known group can
-also recover rigid rotation and replay it along true arcs. The real wheel
-sequence keeps one row identity while all primitive parameters evolve through
-13 executable keyframes. Automatic rigid membership, touching motions, and
-scale remain open.
+The two-frame stage is the first real test of the movement hypothesis.
+Per-primitive warm starts fail beyond a 2–3 px capture radius; change
+components can now be discovered from the frame pair and translated
+independently across it. A known group can also recover rigid rotation and
+replay it along true arcs. The real wheel sequence keeps one row identity while
+all primitive parameters evolve through 13 executable keyframes, but row
+continuity alone does not establish physical or semantic identity. Automatic
+rigid membership, touching motions, and scale remain open.
 
 Those keyframes now reduce to a single closed-form function of `t`: on the
 wheel it is a near-lossless re-encoding with the same 39.73 dB mean fidelity
@@ -790,6 +833,17 @@ held-out split shows the curve bending between the samples rather than
 generalising, so accuracy at unsampled times is the open gate. Everything
 before the two-frame stage is groundwork. See
 [docs/roadmap.md](docs/roadmap.md) for what each stage proves.
+
+## Related work
+
+Deformable 2D-Gaussian video representations already exist. Neo is not claiming
+novelty merely for representing video with Gaussians. Its intended research
+differences are an explicit text/program representation, closed-form temporal
+functions, direct inspectability and editability, independent decoder
+verification, and publication of negative results. These are goals and
+evaluation choices, not an established novelty claim. See
+[docs/related-work.md](docs/related-work.md) for the primary papers and the
+precise comparison.
 
 ## Documentation
 
@@ -800,6 +854,7 @@ before the two-frame stage is groundwork. See
 - [docs/parsimony.md](docs/parsimony.md) — what a primitive is worth, and how few are needed
 - [docs/motion.md](docs/motion.md) — two-frame persistence, its failure, and grouped motion
 - [docs/temporal.md](docs/temporal.md) — keyframes as one function of `t`, and what it does not prove
+- [docs/related-work.md](docs/related-work.md) — direct Gaussian and implicit-video antecedents
 - [docs/verification.md](docs/verification.md) — how correctness is established
 - [docs/roadmap.md](docs/roadmap.md) — the staged plan and what each stage proves
 - [fits/LOG.md](fits/LOG.md) — kept fits, their settings and their numbers
