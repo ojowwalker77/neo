@@ -579,26 +579,28 @@ the readable evaluator recovered for a 120-frame test GIF:
 
 ![the typeset evaluator recovered for the 120-frame GIF](docs/img/one-formula.png)
 
-The complete model is that evaluator **plus every value of `μ`, `w`, `A`, and
-`B`**. `Copy model` exports all four coefficient tables in a portable capsule.
-Given that model, the decoder can evaluate a frame at any `t` without the
-source GIF. The typeset equation alone is not enough; those recovered numbers
-are the visual.
+The complete model is that evaluator **plus every recovered spatial and
+temporal coefficient**. `Copy model` exports those tables and timing knots in
+a portable capsule. Given that model, the decoder can evaluate a frame at any
+`t` without the source GIF. The typeset equation alone is not enough; those
+recovered numbers are the visual.
 
 Two factorisations are stacked. Across primitives, each parameter is
 represented by `R` shared modes with a per-primitive weight — when a wheel
 turns, thousands of primitives move in a few coordinated ways, not thousands of
-independent ways. Across time, each mode is a real Fourier series truncated at
-`H` harmonics, because a GIF loops. Positive extents and `β` are fitted in log
-space, colour in linear light, and orientation along an unwrapped angular path,
-so that no interpolation can produce an invalid primitive.
+independent ways. Across time, a fully sampled periodic control uses a Fourier
+series; an undersampled real clip uses parameter-aware local knots for each
+shared mode. Positive extents and `β` are fitted in log space, colour in
+linear light, and orientation along an unwrapped angular path, so that no
+interpolation can produce an invalid primitive.
 
-The phase is `s(t) = 2π(ωt + τ)`. These are real program-level controls:
-changing `ω` changes playback rate and its sign changes direction, while `τ`
-selects the starting phase. For a periodic recovered program, `ω = -1`
-traverses the recovered loop backwards. That is a valid intervention on the
-program; it is not evidence that the program predicted physically correct
-unseen frames or a true reverse process in the source world.
+The periodic phase is `s(t) = 2π(ωt + τ)`; a knot program uses
+`u(t) = wrap(ωt + τ)`. These are real program-level controls: changing `ω`
+changes playback rate and its sign changes direction, while `τ` selects the
+starting phase. For a periodic recovered program, `ω = -1` traverses the
+recovered loop backwards. That is a valid intervention on the program; it is
+not evidence that the program predicted physically correct unseen frames or a
+true reverse process in the source world.
 
 Applied to the 13 recovered wheel states — 2,285 primitives, one ordered
 identity — and scored by rendering each evaluated program through the ordinary
@@ -649,13 +651,21 @@ reconstruction is on the right:
 The settled poses match closely. Fast-motion frames visibly streak in the
 reconstruction in a way the source does not.
 
-The 88 unsampled frames of that clip **have not been scored**, so no fidelity
-number is claimed for it. That measurement is the next gate.
+The 88 unanchored frames are now scored and alternated across the full timeline
+into 44 validation and 44 test frames. A cosine `H=24 R=16` model chosen on
+validation scored 31.94 dB mean / 28.32 dB worst on the then-untouched test
+half, improving the original same-size Fourier result by 0.69 dB mean and
+2.51 dB worst-frame fidelity.
 
-One boundary worth stating plainly: this extraction is not in the `mathset`
-engine. `mathset/src/` contains no Fourier or curve-fitting code — the search
-runs in a local TypeScript playground, and the numbers above were produced by
-driving that extraction and the native decoder together. See
+A rank-24 local-knot program subsequently reached 32.63 dB mean, within
+0.17 dB of full parameter-aware anchor interpolation, while replacing 960,000
+stored anchor parameters with 757,712 coefficients. Because that family was
+developed after inspecting this source's result, a new unrelated clip—not more
+tuning on this one—is the next generalisation gate.
+
+One boundary worth stating plainly: temporal extraction is not in the
+`mathset` engine. The search runs in a local TypeScript playground; the
+reported frames are evaluated and scored through the Rust/WGPU decoder. See
 [docs/temporal.md](docs/temporal.md) for the derivation, the domain choices,
 and the full measurements.
 
@@ -815,7 +825,7 @@ supposed to stay there.
 | gradient refinement | working |
 | splitting and pruning | working, 10.5x fewer primitives at equal fidelity |
 | two-frame persistence | **verified for synthetic translation and known-group rotation; stable row order on the real wheel** |
-| temporal curves | **working at sampled times, near-lossless on the wheel; unsampled times unproven** |
+| temporal curves | **full-source measured on one 120-frame clip; cross-clip generalisation remains open** |
 
 The two-frame stage is the first real test of the movement hypothesis.
 Per-primitive warm starts fail beyond a 2–3 px capture radius; change
@@ -826,11 +836,14 @@ all primitive parameters evolve through 13 executable keyframes, but row
 continuity alone does not establish physical or semantic identity. Automatic
 rigid membership, touching motions, and scale remain open.
 
-Those keyframes now reduce to a single closed-form function of `t`: on the
-wheel it is a near-lossless re-encoding with the same 39.73 dB mean fidelity
-as the table it replaces. It is not yet compression at full rank, and a
-held-out split shows the curve bending between the samples rather than
-generalising, so accuracy at unsampled times is the open gate. Everything
+Those keyframes now reduce to a single function of `t`: on the wheel it is a
+near-lossless re-encoding with the same 39.73 dB mean fidelity as the table it
+replaces. On a 120-frame source, a validation-selected cosine model improved
+the original Fourier test result at the same size, and a local low-rank knot
+program came within 0.17 dB of full anchor interpolation with 21% fewer
+values. That knot family was developed on this source, so a new unrelated clip
+is the next honest generalisation gate. Reconstruction also does not yet prove
+that edits to the recovered model have stable semantic effects. Everything
 before the two-frame stage is groundwork. See
 [docs/roadmap.md](docs/roadmap.md) for what each stage proves.
 

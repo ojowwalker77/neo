@@ -32,10 +32,10 @@ Three evidence levels matter:
 3. **Interventional meaning:** edits to time controls, temporal functions, or
    primitives have predictable, meaningful effects.
 
-The measurements below establish the first level on the wheel, provide
-negative and incomplete evidence for the second, and expose controls relevant
-to the third. They do not establish physical motion or semantic primitive
-identity from frame reproduction alone.
+The measurements below establish the first level on the wheel, establish
+full-source behaviour for one longer clip, and expose controls relevant to the
+third. One clip does not establish cross-source generalisation, physical
+motion, or semantic primitive identity from frame reconstruction alone.
 
 ## The program
 
@@ -44,10 +44,11 @@ Every primitive parameter becomes a function of `t`. The readable evaluator is:
 ![the typeset evaluator recovered for a 120-frame GIF](img/one-formula.png)
 
 That typeset expression defines how to evaluate the model, but it is not the
-whole payload. A self-contained recovered model also carries every value of
-`μ`, `w`, `A`, and `B`, plus its canvas and timing metadata. The playground's
-`Copy model` action appends those arrays in a versioned capsule; without them,
-the equation describes a family of visuals rather than this particular clip.
+whole payload. A self-contained recovered model also carries every spatial and
+temporal coefficient, plus its canvas and timing metadata. The playground's
+`Copy model` action appends those arrays and timing knots in a versioned
+capsule; without them, the equation describes a family of visuals rather than
+this particular clip.
 
 In text, with `d` indexing the ten parameters of a primitive
 (`x`, `y`, `σx`, `σy`, `θ`, `r`, `g`, `b`, `α`, `β`) and `i` indexing
@@ -76,19 +77,33 @@ much of each mode it follows. `μ_{i,d}` is that primitive's mean value over the
 clip. The modes come from an eigendecomposition of the frame-by-frame
 covariance of the mean-removed trajectories.
 
-**Fourier across time.** Each mode `f_{d,r}` is a real Fourier series in the
-phase `s(t)`, truncated at `H` harmonics. A GIF loops, so the natural basis for
-its motion is periodic. `ω` and `τ` are playback controls — rate and offset —
-not fitted quantities.
+**A temporal function for each mode.** Fully sampled periodic controls use a
+real Fourier series in the phase `s(t)`, truncated at `H` harmonics. Long
+sources fitted at sparse anchors can instead use local linear knots:
 
-`H` and `R` are the two knobs. `H` is bounded by `floor((frames − 1) / 2)`,
-because that is where a Fourier series stops being determined by the samples.
-`R` is bounded by `frames − 1`.
+```
+k(t)       = max { k : p_k ≤ t }
+λ(t)       = (t − p_k) / (p_{k+1} − p_k)
+f_{d,r}(t) = (1 − λ) C_{d,r,k} + λ C_{d,r,k+1}
+```
+
+The knot program is still one evaluable function of `t`; unlike a table of
+full primitive states, it stores knot values only for a small set of shared
+low-rank modes. Its local support avoids making every timestamp depend on one
+global curve. At or beyond the final anchor phase it holds the final knot until
+the phase wraps. `ω` and `τ` remain playback controls — rate and offset — not
+fitted quantities.
+
+`R` controls spatial rank for either temporal basis and is bounded by
+`frames − 1`. Fourier programs also expose `H`, bounded by
+`floor((frames − 1) / 2)`; knot programs use the recovered anchor phases
+directly instead.
 
 ### Time is part of the program
 
-Because time enters explicitly through `s(t) = 2π(ωt + τ)`, playback controls
-operate on the recovered program rather than on a rendered frame buffer:
+Because time enters explicitly through `s(t) = 2π(ωt + τ)` or the knot phase
+`u(t) = wrap(ωt + τ)`, playback controls operate on the recovered program
+rather than on a rendered frame buffer:
 
 - the magnitude of `ω` changes rate and its sign changes direction;
 - `τ` shifts phase, choosing a different point on the loop as the origin;
@@ -128,11 +143,11 @@ Every figure below is a decoder render of an evaluated program, scored against
 the real GIF frame in sRGB. The decoder is the ordinary `mathset render`; it
 never sees the source.
 
-The harness is `scripts/score-formula.mjs`. It imports the TypeScript
-extraction and shells out to the release binary, and **both it and the
-extraction are untracked**, so these numbers cannot be regenerated from a clean
-checkout. Treat them as measurements taken on 2026-07-28, not as a standing
-gate. Making them reproducible means item 5 below.
+The wheel harness is `scripts/score-formula.mjs`; the long-source harness is
+`scripts/validate-gif.mjs`. They import the TypeScript extraction and score
+through the Rust/WGPU decoder. The playground and both scripts are untracked,
+so these numbers cannot be regenerated from a clean checkout. Treat them as
+measurements taken locally, not as a standing engine gate.
 
 ### The formula against the table it replaces
 
@@ -206,17 +221,38 @@ photographed at the top of this document: 3,000 primitives, `H`=12, `R`=16.
 ![the 120-frame source beside its reconstruction](img/giphy-side-by-side.png)
 
 It plays convincingly, and the settled poses match closely. The fast-motion
-frames show visible streaking that the source does not have — consistent with
-the held-out result above, since 88 of those 120 frames are unsampled times.
+frames show visible streaking that the source does not have. Those 88
+unanchored frames are now measured, rather than judged from playback.
 
-**Those 88 frames have not been scored.** No fidelity number is claimed for
-`giphy.gif` here, and the picture above is an illustration, not a measurement.
+The split is deterministic: order the unanchored frames by time, alternate 44
+into validation and 44 into test, choose capacity using validation only, then
+read test once. Every score below renders the evaluated state with the native
+Rust/WGPU decoder at the model canvas and compares it to the real source.
+
+| representation | coefficients | validation mean / worst | test mean / worst |
+|---|---:|---:|---:|
+| 32 full anchor states, parameter-aware interpolation | 960,000 | 32.80 / 28.99 dB | 32.80 / 28.47 dB |
+| periodic Fourier, `H=12 R=16` | 514,000 | 31.25 / 24.67 dB | 31.25 / 25.81 dB |
+| non-periodic cosine, `H=24 R=16` | 514,000 | **31.90 / 28.41 dB** | **31.94 / 28.32 dB** |
+| non-periodic cosine, `H=24 R=24` | 756,000 | 32.52 / 29.17 dB | 32.49 / 29.07 dB |
+| local linear knots, `R=24` | 757,712 | 32.64 / 28.97 dB | 32.63 / 28.43 dB |
+
+The cosine `H=24 R=16` row is the clean model-selection result: it won on the
+validation half, then improved the original Fourier model by 0.69 dB mean and
+2.51 dB worst-frame fidelity on the untouched test half at the same
+coefficient count.
+
+The local-knot row is the best size/fidelity trade found afterwards. It uses
+21% fewer values than the full anchor table and gives up 0.17 dB mean fidelity
+on these frames. Because that model family was proposed after the test result
+had been inspected, its score is development evidence, not a second untouched
+claim. A new source is required to confirm it.
 
 ## Where the code is
 
 The temporal extraction is **not part of the tracked `mathset` engine.**
 `mathset/src/` contains the keyframed timeline sampler and parameter-aware
-transitions, but no Fourier or curve-fitting code. The Fourier search and
+transitions, but no temporal curve-fitting code. The temporal search and
 program evaluator are in the local playground, in TypeScript:
 
 - `app/neo/model.ts` — basis extraction, rank truncation, evaluation, and the
@@ -235,22 +271,17 @@ extraction and the native decoder together.
 
 In rough order of how much each would change the picture:
 
-1. **Score the unsampled frames of a real clip.** The anchor scheme fits 32 of
-   120; the other 88 are the actual claim and are currently unmeasured. This is
-   the gate.
-2. **Choose `H` by held-out error, not by the sample bound.** The current cap
-   is `floor((frames − 1) / 2)` — the point where the fit stops being
-   determined. The measurement above says the useful `H` is well below that.
-3. **Fit the curve against pixels, not against recovered coefficients.** The
+1. **Run the same protocol on a new real clip.** Choose capacity on validation
+   and open test once. The knot model must generalise beyond the source that
+   motivated it.
+2. **Fit the curve against pixels, not against recovered coefficients.** The
    present fit minimises error in coefficient space and inherits whatever the
    per-anchor spatial fits produced. A refinement pass with the loss on the
    rendered frame would let the curve trade one primitive's error against
    another's.
-4. **Test a non-periodic clip.** The Fourier basis assumes the motion loops.
-   Every source tried so far does.
-5. **Test interventions, not only playback.** Controlled edits need expected
+3. **Test interventions, not only playback.** Controlled edits need expected
    outcomes, ideally on synthetic scenes with known object and motion
    structure. A plausible edit is not evidence of semantic identity.
-6. **Move the extraction into `mathset`.** While it lives in an untracked
+4. **Move the extraction into `mathset`.** While it lives in an untracked
    playground, none of the numbers above are reproducible from a checkout and
    none of them can be defended by `tools/verify.sh`.

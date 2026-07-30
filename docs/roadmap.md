@@ -116,11 +116,12 @@ At that point a clip is not a sequence of descriptions. It is one description
 with time in it, and motion is a handful of coefficients rather than a
 difference between frames.
 
-The basis chosen is not polynomials or splines but `R` shared spatial modes per
-parameter, each modulated by a real Fourier series of `H` harmonics in the loop
-phase — a GIF repeats, so the natural time basis is periodic, and thousands of
-primitives moving coherently are described by a few modes rather than a few
-thousand independent curves.
+The representation uses `R` shared spatial modes per parameter, so thousands
+of primitives moving coherently are described by a few modes rather than a few
+thousand independent curves. Fully sampled loop controls use a periodic
+Fourier basis. Long clips fitted at sparse anchors use parameter-aware local
+knots for those shared modes, avoiding a single global curve through arbitrary
+footage.
 
 Two results, in the order they matter.
 
@@ -131,21 +132,18 @@ with `3.62 × 10⁻⁸` relative coefficient RMS. Only 110 of 2,269,696 rendered
 pixels differ, by at most 3/255 in one RGB channel. Truncating to rank 3 gives
 3.2× fewer coefficients at 35.32 dB.
 
-The second is the reason this stage is not done. At full rank the coefficient
-count is very slightly *higher* than storing the keyframes outright — the win
-is form, not size. And a held-out split, fitting 7 of the 13 states and scoring
-the 6 withheld frames, shows `H`=3 reconstructing what it saw at 37.09 dB and
-what it did not at 31.67 dB. The larger model fits its samples better and the
-gaps worse. The curve is interpolating, not generalising.
+The 88 unanchored frames of the 120-frame clip are now scored. A cosine model
+chosen on 44 validation frames reached 31.94 dB mean / 28.32 dB worst on the
+then-untouched 44-frame test half. A local rank-24 knot program developed from
+that experiment comes within 0.17 dB of full anchor interpolation with 21%
+fewer values.
 
-So the stage has proved that this recovered keyframe table can be re-encoded as
-a closed-form program at its sampled times. It has not proved that the program
-is right between samples, that its trajectories are the source's physical
-motion, or that its primitive rows have semantic identity. Scoring the 88
-unsampled frames of a 120-frame clip is the next gate. Controlled interventions
-with expected outcomes come after that. The extraction also lives in a local
-TypeScript playground rather than in `mathset/`, and has to be reimplemented
-against the engine before it counts as shipped. See [temporal.md](temporal.md).
+So the stage now proves full-source temporal reconstruction for one real clip,
+not general recovery. The knot family needs the same one-shot validation/test
+protocol on a new unrelated source, and edits to the recovered program still
+need intervention tests. Extraction also lives in a local TypeScript
+playground rather than in `mathset/`, so it is not yet a shipped engine stage.
+See [temporal.md](temporal.md).
 
 ## 7 · The exhibit
 

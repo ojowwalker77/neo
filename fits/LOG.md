@@ -319,3 +319,41 @@ are untracked, so this row **cannot be reproduced from a clean checkout** — it
 is logged as a measurement taken, not as a standing gate. No coefficient tables
 are kept here yet for the same reason. See
 [../docs/temporal.md](../docs/temporal.md).
+
+## 2026-07-30 — 120-frame full-source temporal validation
+
+Stage 6 held-out gate. `assets/giphy.gif` has 120 source frames over 3.6 s.
+The spatial fitter recovered one persistent 3,000-primitive timeline at 32
+motion-aware anchors. Every candidate program was then evaluated at all 120
+original timestamps, rendered through the Rust/WGPU decoder, and scored
+against the real source pixels.
+
+The 88 unanchored frames were ordered by time and alternated into 44 validation
+and 44 test frames. Model selection reads validation only; the test half is
+opened after one candidate is chosen.
+
+| representation | coefficients | validation mean / worst | test mean / worst |
+|---|---:|---:|---:|
+| 32 full anchor states, parameter-aware interpolation | 960,000 | 32.80 / 28.99 dB | 32.80 / 28.47 dB |
+| periodic Fourier, `H=12 R=16` | 514,000 | 31.25 / 24.67 dB | 31.25 / 25.81 dB |
+| non-periodic cosine, `H=24 R=16` | 514,000 | **31.90 / 28.41 dB** | **31.94 / 28.32 dB** |
+| non-periodic cosine, `H=24 R=24` | 756,000 | 32.52 / 29.17 dB | 32.49 / 29.07 dB |
+| local linear knots, `R=24` | 757,712 | 32.64 / 28.97 dB | 32.63 / 28.43 dB |
+
+The clean predeclared result is the cosine `H=24 R=16` row: it won on
+validation, then improved the same-size Fourier model by 0.69 dB mean and
+2.51 dB worst-frame fidelity on the then-untouched test half.
+
+The local-knot family was proposed after that test had been inspected. Its
+rank-24 result is therefore development evidence rather than a second
+untouched claim. It is the best size/fidelity trade found: 21% fewer values
+than storing the 32 full anchor states for a 0.17 dB mean-fidelity cost against
+their parameter-aware interpolation.
+
+Produced by the local ignored harnesses `scripts/validate-gif.mjs` and
+`scripts/select-temporal-model.mjs`. They preserve every anchor state and JSON
+report under `mathset/target/neo-validation/giphy/`, also ignored. These
+measurements cannot be regenerated from a clean checkout and are logged as
+local research evidence, not a standing engine gate. The next honest result
+must use a new unrelated source and open its test split once. See
+[../docs/temporal.md](../docs/temporal.md#the-120-frame-source).

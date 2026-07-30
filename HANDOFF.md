@@ -101,8 +101,8 @@ source RGBA frames
 persistent ordered .mathset states
     ↓ coefficient-domain transform
 per-primitive parameter trajectories
-    ↓ low-rank spatial modes + Fourier time basis
-μ / w / A / B coefficient tables
+    ↓ low-rank spatial modes + periodic or local time basis
+μ / w / temporal coefficient tables
     ↓ Neo model capsule appended as LaTeX comments
 self-contained copy / paste model
 ```
@@ -157,14 +157,28 @@ source indices were:
 58, 62, 66, 70, 74, 78, 82, 86, 90, 94, 98, 102, 106, 111, 115, 119
 ```
 
-Temporal extraction currently caps the model at 12 harmonics and rank 16. It
-fits in transformed coefficient space: positive extents/β in log space,
-colour in linear-light space, and orientation on an unwrapped angular path.
+Temporal extraction fits in transformed coefficient space: positive
+extents/β in log space, colour in linear-light space, and orientation on an
+unwrapped angular path. A source whose every frame was fitted keeps the
+periodic Fourier control. An undersampled source now uses 24 low-rank spatial
+modes with one parameter-aware linear knot per anchor. This is still one
+continuous function of time, but its temporal behaviour is local rather than
+forcing one global periodic curve through arbitrary footage.
 
 This is a mathematically legitimate sampling optimisation, not a hardcoded
-wheel shortcut. However, the 32-anchor formula has **not yet been scored on
-all held-out source frames**. Anchor fidelity and coefficient error are shown;
-full-source reconstruction fidelity is the next critical gate.
+wheel shortcut. The 120-frame source has now been scored at every original
+timestamp through the native Rust/WGPU decoder. The 88 unanchored frames were
+alternated across the timeline into 44 validation and 44 test frames. The
+original Fourier `H=12, R=16` model scored 31.25 dB validation / 31.25 dB
+test; a same-budget cosine `H=24, R=16` model selected on validation scored
+31.94 dB on the then-untouched test set.
+
+The parameter-aware 32-anchor interpolation baseline scores 32.80 dB on that
+test half with 960,000 stored primitive parameters. The new rank-24 local-knot
+program scores 32.63 dB with 757,712 coefficients: 21% fewer values for a
+0.17 dB mean-fidelity cost. That knot family was designed after inspecting
+the first experiment, so its number is exploratory, not a new untouched test.
+Use a new unrelated clip for the next claim.
 
 The smaller 13-frame wheel control has now been scored. At `H=6`, `R=12`, its
 formula matches the stored timeline's 39.73 dB mean and 38.16 dB worst-frame
@@ -200,15 +214,16 @@ reconstruction, not copied pixels.
 
 ### Copy / paste contract
 
-Readable LaTeX is not sufficient to reproduce a visual: the values of
-`μ`, `w`, `A`, and `B` are the actual model. `COPY MODEL` therefore appends a
+Readable LaTeX is not sufficient to reproduce a visual: the recovered spatial
+and temporal coefficient values are the actual model. `COPY MODEL` appends a
 versioned `% NEO_MODEL_V1_BEGIN … END` capsule containing every Float32
 coefficient array:
 
 - `means` (`μ`);
 - low-rank per-trajectory `weights` (`w`);
-- Fourier `modeCoefficients` (`A` and `B`);
-- canvas, background, timing, rank, harmonics, fidelity, and source metadata.
+- temporal `modeCoefficients` (Fourier `A/B`, cosine `A`, or knot `C`);
+- irregular `samplePhases` used by a knot program;
+- canvas, background, timing, basis, rank, fidelity, and source metadata.
 
 Plain header-only LaTeX is rejected as incomplete. A complete pasted capsule
 reconstructs independently of the original upload. Capsule decoding validates
@@ -229,10 +244,11 @@ npm run lint
 npm test
 ```
 
-`npm test` performs the production build and 12 tests. Those tests cover the
+`npm test` performs the production build and 24 tests. Those tests cover the
 wheel timeline, equation recovery, static image programs, complete model
-copy/paste, motion-anchor selection, GIF decoding, server-rendered UI, and
-shipped control data.
+copy/paste including irregular knots, temporal validation/model selection,
+motion-anchor selection, GIF decoding, server-rendered UI, and shipped control
+data.
 
 The native image endpoint was also exercised end-to-end with
 `assets/whiterabbit.jpg`; it returned one state, phase 0, 3,000 primitives,
@@ -262,7 +278,7 @@ Stages 1–4 are done, verified, documented and pushed. See `README.md` sections
 | gradient refinement | done, 4,000 → 30.99 dB (6.2× fewer) |
 | prune + split | done, 2,381 → 31.12 dB (10.5× fewer) |
 | **two-frame persistence** | **in progress — translation and rigid tests pass; real wheel persists through 13 keyframes** |
-| temporal curves | local playground prototype works; held-out full-source validation is not done |
+| temporal curves | full-source scored on one long clip; new-source generalisation is open |
 
 Verification gates, both should stay green:
 
@@ -439,16 +455,13 @@ real animation, parameter transition rules, and reproduction commands.
 
 ## What to do next
 
-**1 · Validate the extracted formula on every source frame.** The playground
-now fits a low-rank Fourier model from at most 32 anchors, but its displayed
-temporal error is coefficient error at those anchors. Evaluate the equation
-program at every original GIF timestamp, render it through an independent
-decoder, and report full-sequence PSNR plus a per-frame curve. Add anchors or
-rank only when held-out error demands it. Do not accept a formula because the
-loop merely looks plausible.
-
-This is the most important next task. It decides whether the current
-acceleration is a sound inverse model or an under-sampled approximation.
+**1 · Repeat the full-source gate on unrelated footage.** The playground now
+scores every original timestamp through the Rust/WGPU decoder and keeps
+validation separate from a final test split. Run the complete 32-anchor fit on
+a new real clip, choose model capacity on validation only, then open the test
+result once. Do not tune the model family after reading that result. The
+current local-knot result is promising but was developed on the only long clip
+in the workspace.
 
 **2 · Make the fitter remotely deployable before publishing Sites.** Preserve
 the truthful streamed stages and cancellation contract. The obvious boundary
